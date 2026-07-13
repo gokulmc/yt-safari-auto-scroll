@@ -48,10 +48,23 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   // the reel_watch_sequence endpoint so playback continues indefinitely.
   if (msg.type === 'shorts-advance-inplace') {
     return injectMain(tabId, async () => {
-      const ID_RE = /\/shorts\/([A-Za-z0-9_-]{11})/g;
-      const SEQ_RE = /"sequenceParams":"([^"]+)"/g;
       const VID_RE = /"videoId":"([A-Za-z0-9_-]{11})"/g;
+      const ID_RE = /\/shorts\/([A-Za-z0-9_-]{11})/g;
       const uniq = (a) => Array.from(new Set(a));
+      // First `token` string found anywhere under a continuationEndpoint —
+      // this is the reel sequence's continuation (NOT the comments panel's,
+      // which lives elsewhere in the tree).
+      const digToken = (o, d) => {
+        if (!o || typeof o !== 'object' || d > 8) return null;
+        for (const k of Object.keys(o)) {
+          if (k === 'token' && typeof o[k] === 'string') return o[k];
+          if (o[k] && typeof o[k] === 'object') {
+            const t = digToken(o[k], d + 1);
+            if (t) return t;
+          }
+        }
+        return null;
+      };
 
       const p = document.getElementById('shorts-player');
       if (!p || typeof p.loadVideoById !== 'function' || typeof p.getVideoData !== 'function') {
@@ -61,47 +74,54 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 
       const st = (window.__ytsasQ = window.__ytsasQ || {});
       if (!st.queue) {
-        let s = '{}';
-        try {
-          s = JSON.stringify(window.ytInitialData || {});
-        } catch (e) {
-          /* ignore */
+        st.queue = [];
+        st.token = null;
+        // Primary source: the reel sequence response YouTube loads for every
+        // Short (present on both direct loads and organic browsing). Falls
+        // back to any /shorts/ ids in ytInitialData.
+        const rwsr = window.ytInitialReelWatchSequenceResponse;
+        if (rwsr) {
+          const t = JSON.stringify(rwsr);
+          st.queue = uniq(Array.from(t.matchAll(VID_RE)).map((m) => m[1]));
+          st.token = digToken(rwsr.continuationEndpoint, 0);
         }
-        st.queue = uniq(Array.from(s.matchAll(ID_RE)).map((m) => m[1]));
-        st.seq = uniq(Array.from(s.matchAll(SEQ_RE)).map((m) => m[1]));
+        if (!st.queue.length) {
+          let s = '{}';
+          try { s = JSON.stringify(window.ytInitialData || {}); } catch (e) {}
+          st.queue = uniq(Array.from(s.matchAll(ID_RE)).map((m) => m[1]));
+        }
       }
 
       let idx = st.queue.indexOf(cur);
       if (idx === -1) {
-        // Current Short isn't in our list (e.g. the user scrolled manually);
-        // anchor the queue at it so we can move forward from here.
         st.queue.push(cur);
         idx = st.queue.length - 1;
       }
       let next = st.queue[idx + 1];
 
-      if (!next) {
-        // Refill from the reel sequence endpoint (fetch works while hidden).
+      if (!next && st.token) {
+        // Refill via the reel continuation token (fetch works while hidden);
+        // capture the NEXT token from the response so this chains forever.
         const cfg = window.ytcfg && typeof window.ytcfg.get === 'function' ? window.ytcfg : null;
         const apiKey = cfg ? cfg.get('INNERTUBE_API_KEY') : null;
         const ctx = cfg ? cfg.get('INNERTUBE_CONTEXT') : null;
-        const seqParam = st.seq && st.seq[st.seq.length - 1];
-        if (apiKey && ctx && seqParam) {
+        if (apiKey && ctx) {
           try {
             const res = await fetch(
               `https://www.youtube.com/youtubei/v1/reel/reel_watch_sequence?key=${apiKey}&prettyPrint=false`,
               {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ context: ctx, sequenceParams: seqParam }),
+                body: JSON.stringify({ context: ctx, continuation: st.token }),
                 credentials: 'include',
               }
             );
             const txt = await res.text();
+            let json = null;
+            try { json = JSON.parse(txt); } catch (e) {}
             const more = uniq(Array.from(txt.matchAll(VID_RE)).map((m) => m[1]));
-            const moreSeq = uniq(Array.from(txt.matchAll(SEQ_RE)).map((m) => m[1]));
             for (const id of more) if (!st.queue.includes(id)) st.queue.push(id);
-            if (moreSeq.length) st.seq = moreSeq; // chain forward for the next refill
+            st.token = json ? digToken(json.continuationEndpoint, 0) : null;
             next = st.queue[idx + 1];
           } catch (e) {
             return { ok: false, reason: 'refill-failed: ' + e };

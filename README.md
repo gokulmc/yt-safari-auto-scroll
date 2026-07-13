@@ -15,7 +15,7 @@ in the background, and (the genuinely hard part) plays real Shorts in a
 **Picture-in-Picture window that keeps advancing on its own, even while Safari
 is hidden.**
 
-<p align="center"><img src="docs/modes-light.png" width="840" alt="Auto-scroll · Background audio · Background PiP"></p>
+<p align="center"><img src="docs/features-light.png" width="840" alt="Auto-scroll · Background audio · Background PiP"></p>
 
 - **Auto-scroll Shorts** — when a Short ends, it advances to the next one
   automatically. Toggle it on/off from the toolbar.

@@ -126,7 +126,7 @@ def glyph_pip(d, cx, cy, s, color):
                          cx + w / 2 - s * 0.12, cy + h / 2 - s * 0.12], radius=s * 0.06, fill=color)
 
 def modes():
-    W, H = 1200 * SS, 300 * SS
+    W, H = 1200 * SS, 310 * SS
     canvas = vgradient(W, H, BG_TOP, BG_BOT).convert("RGB")
     d = ImageDraw.Draw(canvas)
     cards = [
@@ -137,24 +137,25 @@ def modes():
     pad = 50 * SS
     gap = 30 * SS
     cw = (W - 2 * pad - 2 * gap) // 3
-    ch = 200 * SS
+    ch = 234 * SS
     cy0 = (H - ch) // 2
-    f_h = font(BOLD, 34 * SS)
-    f_b = font(REG, 24 * SS)
+    f_h = font(BOLD, 33 * SS)
+    f_b = font(REG, 23 * SS)
     for i, (g, title, lines) in enumerate(cards):
         x0 = pad + i * (cw + gap)
         d.rounded_rectangle([x0, cy0, x0 + cw, cy0 + ch], radius=22 * SS,
                             fill=CARD, outline=CARD_BORDER, width=2 * SS)
+        px = x0 + 34 * SS  # inner left padding
         # glyph in a light-red circle
-        gcx, gcy = x0 + 56 * SS, cy0 + 58 * SS
-        d.ellipse([gcx - 34 * SS, gcy - 34 * SS, gcx + 34 * SS, gcy + 34 * SS], fill=(255, 232, 236))
-        g(d, gcx, gcy, 40 * SS, RED)
-        d.text((x0 + 34 * SS, cy0 + 100 * SS), title, font=f_h, fill=INK)
+        gcx, gcy = px + 22 * SS, cy0 + 58 * SS
+        d.ellipse([gcx - 32 * SS, gcy - 32 * SS, gcx + 32 * SS, gcy + 32 * SS], fill=(255, 232, 236))
+        g(d, gcx, gcy, 38 * SS, RED)
+        d.text((px, cy0 + 106 * SS), title, font=f_h, fill=INK)
         for j, ln in enumerate(lines):
-            d.text((x0 + 34 * SS, cy0 + 146 * SS + j * 32 * SS), ln, font=f_b, fill=MUTED)
-    out = canvas.resize((1200, 300), Image.LANCZOS)
-    out.save(DOCS / "modes-light.png")
-    print("wrote", DOCS / "modes-light.png")
+            d.text((px, cy0 + 152 * SS + j * 32 * SS), ln, font=f_b, fill=MUTED)
+    out = canvas.resize((1200, 310), Image.LANCZOS)
+    out.save(DOCS / "features-light.png")
+    print("wrote", DOCS / "features-light.png")
 
 if __name__ == "__main__":
     hero()

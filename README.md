@@ -1,100 +1,245 @@
+<p align="center"><img src="docs/hero.png" width="760" alt="YT Shorts Auto-Scroll"></p>
+
+<p align="center">
+  <a href="#install"><img src="https://img.shields.io/badge/Safari-17%2B-blue?logo=safari&logoColor=white" alt="Safari 17+"></a>
+  <img src="https://img.shields.io/badge/Manifest-v3-8A2BE2" alt="MV3">
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple" alt="macOS">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT"></a>
+</p>
+
 # YT Shorts Auto-Scroll
 
-<img src="extension/images/icon-256.png" width="128" alt="YT Shorts Auto-Scroll icon" align="right">
+A Safari Web Extension that plays YouTube Shorts **hands-free** — it advances
+to the next Short the instant one ends, keeps the audio going when Safari is
+in the background, and (the genuinely hard part) plays real Shorts in a
+**Picture-in-Picture window that keeps advancing on its own, even while Safari
+is hidden.**
 
-A Safari Web Extension that auto-advances YouTube Shorts when they end — **even in Picture-in-Picture, with the window backgrounded or minimized.** It also ships a toolbar popup with a universal "Picture-in-Picture this page" button that works on any site, not just YouTube.
+<p align="center"><img src="docs/modes.png" width="840" alt="Auto-scroll · Background audio · Background PiP"></p>
 
-<!-- TODO: demo GIF -->
+- **Auto-scroll Shorts** — when a Short ends, it advances to the next one
+  automatically. Toggle it on/off from the toolbar.
+- **Background audio** — minimize Safari on a Short and it keeps playing real
+  Shorts, one after another, hands-free (audio only, no window).
+- **Background Shorts (PiP)** — one tap builds a playlist of upcoming Shorts,
+  pops it into a floating Picture-in-Picture window, and keeps advancing
+  through **rendered** Shorts even when Safari is in the background.
+- **Picture-in-Picture this page** — a universal button that pops whatever
+  video is playing on the current tab (any site) into PiP.
+- **Zero dependencies, zero build step** for the extension itself — plain JS,
+  MV3, promise-based `browser.*` APIs.
 
 ## Why this exists
 
-Poll-based Shorts auto-scroll userscripts work fine in a normal foreground tab, but stop advancing the moment a Short goes into Picture-in-Picture (or the tab is backgrounded). The root cause: Safari clamps `setInterval` to at least ~1 second and *suspends it entirely* in hidden/occluded tabs. A 300ms poll that's supposed to keep re-forcing `loop = false` after YouTube resets it per-video simply never runs — so the Short loops forever instead of advancing.
-
-This extension has no poll loop at all. It's entirely event-driven off the media pipeline (`ended`, `timeupdate`, `playing`, and friends), which keeps firing from the browser's media engine regardless of tab visibility or PiP state. That's the actual fix, not a workaround.
-
-## Features
-
-- Auto-advances to the next Short when the current one ends, indefinitely — including while backgrounded or in PiP.
-- A toolbar toggle to turn auto-scroll on/off (on by default).
-- "Picture-in-Picture this page" button in the popup — pops out whatever video is currently playing on the active tab, on any site (YouTube, Vimeo, wherever there's a `<video>`).
-- Auto-restores Picture-in-Picture across an auto-advance when the advance is what dropped it (never fights you if you close PiP yourself).
-- Zero external dependencies, zero build step. Plain JS, MV3, promise-based `browser.*` APIs.
-
-## Requirements
-
-- macOS
-- Safari 17 or later (Safari 26+ recommended for the no-Xcode temporary-extension dev loop described below)
-- Xcode — only needed if you want a **persistent** install that survives a Safari restart. Not needed for the temporary-extension path.
+Poll-based Shorts auto-scrollers (the userscripts and Chrome extensions you'll
+find) all work the same way — a timer that clicks YouTube's *next* button — and
+they all break the moment the tab isn't in the foreground, because **Safari
+suspends timers and the rendering pipeline for hidden tabs.** This extension is
+event-driven off the media pipeline instead, so it keeps working where the
+others stop. Getting Shorts to play *in a background PiP window* took cracking
+three separate Safari/YouTube behaviours (see [How it works](#how-it-works)).
 
 ## Install
 
-There are two ways to run this extension. Pick one.
+There are two ways to run it. The temporary path needs no build; the Xcode path
+gives you a persistent install.
 
-### (a) Temporary extension — fastest, no Xcode, but unloads on Safari quit
+### (a) Temporary extension — fastest, no Xcode (Safari 26+)
 
-Requires Safari 26+.
-
-1. Safari → Settings → Advanced → check **"Show features for web developers"**.
-2. A **Developer** menu/tab appears in Settings. Open it.
-3. Click **"Add Temporary Extension…"** and select this repo's `extension/` folder.
-4. The extension is now active. It unloads automatically when Safari quits — repeat this step to reload it (e.g. after pulling changes).
-
-This is the recommended path for trying the extension out or iterating on the source.
+1. Safari → Settings → **Advanced** → check **"Show features for web
+   developers"**.
+2. A **Developer** tab appears in Settings. Open it → **"Add Temporary
+   Extension…"** → select this repo's `extension/` folder.
+3. It's active until Safari quits — repeat to reload (e.g. after `git pull`).
 
 ### (b) Xcode build — persistent install
 
-This packages `extension/` into a thin native wrapper app that registers the extension with Safari, and it stays installed across restarts.
+The generated Xcode project is **committed**, so you don't need to run the
+packager — just open and run.
 
-1. One-time, if you've never run the Safari web extension packager on this Mac:
-   ```
-   xcodebuild -runFirstLaunch
-   ```
-2. The generated Xcode project is **already committed** at `xcode/YT Shorts Auto-Scroll/` — you normally don't run the packager at all. (Only if you need to regenerate it, e.g. after big manifest changes:
-   ```
-   xcrun safari-web-extension-packager extension/ \
-     --project-location xcode \
-     --app-name "YT Shorts Auto-Scroll" \
-     --bundle-identifier com.gokulmc.yt-shorts-autoscroll \
-     --swift --macos-only --no-open --no-prompt --force
-   ```
-   If `safari-web-extension-packager` isn't found, try `safari-web-extension-converter` — Apple renamed the tool. Note the packager derives the *app* target's bundle id from the app name instead of honoring `--bundle-identifier`; fix `PRODUCT_BUNDLE_IDENTIFIER` for the app target in `project.pbxproj` to `com.gokulmc.yt-shorts-autoscroll` or the build fails embedded-binary validation.)
-3. Open `xcode/YT Shorts Auto-Scroll/YT Shorts Auto-Scroll.xcodeproj`, select the app target, and under **Signing & Capabilities** select **your own team** (a free personal Apple ID team works). Then press **⌘R** to build and run — this installs and registers the extension with Safari.
-   - No Apple ID / no team? Use ad-hoc signing instead and enable Safari → Settings → Developer → **"Allow unsigned extensions"**. This setting **resets every time Safari quits**, so you'll need to re-toggle it each session.
-4. Safari → Settings → Extensions → enable "YT Shorts Auto-Scroll".
-5. For subsequent rebuilds (or to skip Xcode's GUI entirely), `scripts/build.sh` wraps the equivalent `xcodebuild` command with ad-hoc signing and opens the built app for you. The Xcode scheme is already shared in the repo (`xcshareddata/xcschemes/`), so this works straight after a fresh clone.
+1. `open "xcode/YT Shorts Auto-Scroll/YT Shorts Auto-Scroll.xcodeproj"`
+2. Select the app target → **Signing & Capabilities** → choose **your own
+   team** (a free personal Apple ID works). Press **⌘R**.
+   - No Apple ID? Use ad-hoc signing and enable Safari → Settings → Developer →
+     **"Allow unsigned extensions"** (this resets every time Safari quits).
+3. Safari → Settings → **Extensions** → enable **YT Shorts Auto-Scroll**.
+4. On youtube.com, click the toolbar icon once and choose **"Always Allow on
+   This Website"** (one-time; the content script is inert until you do).
 
-## Permission UX
+<details>
+<summary>Regenerating the Xcode project from source (rarely needed)</summary>
 
-- **On `www.youtube.com`**: the first time you click the toolbar icon, Safari shows its own per-site permission sheet instead of the popup. Choose **"Always Allow on This Website"** — this is one-time. The content script needs this to auto-advance Shorts.
-- **On any other site**: the extension only requests `activeTab`, which Safari grants silently for the current tab the moment you click the toolbar icon — no separate prompt.
+```bash
+xcodebuild -runFirstLaunch   # once per machine, or the packager crashes
+xcrun safari-web-extension-packager extension/ \
+  --project-location xcode --app-name "YT Shorts Auto-Scroll" \
+  --bundle-identifier com.gokulmc.yt-shorts-autoscroll \
+  --swift --macos-only --no-open --no-prompt --force
+```
+
+The packager derives the **app** target's bundle id from the app name rather
+than honouring `--bundle-identifier`; fix `PRODUCT_BUNDLE_IDENTIFIER` for the
+app target to `com.gokulmc.yt-shorts-autoscroll` or the build fails
+embedded-binary validation.
+</details>
 
 ## Usage
 
-- Click the toolbar icon to open the popup.
-- **Auto-scroll Shorts** toggle: on by default. Turn it off to fall back to YouTube's native (looping) Shorts behavior.
-- **Picture-in-Picture this page**: pops out the best-guess `<video>` on the current tab. Works on YouTube Shorts, regular YouTube videos, and other video sites. If Safari blocks the page (e.g. the Safari start page, a PDF, or a page where the extension has no access) or there's simply no video, the popup shows an inline message instead of failing silently.
+- **Toolbar icon** → popup. The icon is full-colour when auto-scroll is on,
+  grey/translucent when off.
+- **Auto-scroll Shorts** toggle — advances Shorts as you watch. Turn it off to
+  restore YouTube's native looping.
+- **▶ Background Shorts (PiP)** — on a Short, tap this. It shows a 10-second
+  "Setting up…" countdown while it builds the playlist and loads the player,
+  then lands on a playlist page with a red **"▶ Start background Shorts"**
+  button. Click that once to enter PiP, then minimize Safari — it keeps playing
+  rendered Shorts hands-free.
+- **Picture-in-Picture this page** — pops the current tab's video into PiP,
+  works on any site.
 
 ## How it works
 
-`extension/content.js` runs on `www.youtube.com` at `document_start` and installs capture-phase listeners on `document` for the relevant media events synchronously, before doing anything async — this matters because a WebKit bug (FB9157626) means `document_start` can inject *after* a Shorts video has already started playing when "Preload Top Hit" is active, so a startup scan for an already-active video runs alongside the listener install as a hedge.
+Three Safari behaviours stand between "click next on a timer" and "hands-free
+Shorts in a background PiP window." Here's each, and how the extension gets
+around it.
 
-From there it's all reactive:
-- `timeupdate`/`playing`/etc. on the currently-active Short force `loop = false` (YouTube sets `loop = true` per video load, so this has to be re-forced continuously, not once).
-- `ended` on the active video triggers `advance()`, which clicks YouTube's own "next" button, falls back to a different selector, and as a last resort dispatches a synthetic `ArrowDown` keydown — it never uses `history.pushState` (invisible to YouTube's router) or `location.href` (a full reload, which would kill PiP).
-- A loop-restart guard watches for YouTube's native loop winning the race against the `loop = false` forcing (a backward jump in `currentTime` after sitting near the end) and treats it as a missed `ended`.
-- Picture-in-Picture is tracked via both the standard PiP events and Safari's `webkitpresentationmodechanged`, and is auto-restored after an advance only when the advance itself is what dropped it — closing PiP yourself (even right after an advance) is never overridden.
-- A 5-second watchdog does cheap, idempotent cleanup only (re-asserting `loop = false`, retrying a stuck `ended` state, nudging a stalled `paused` video, and attaching direct per-element listeners to any `<video>` as a shadow-DOM hedge) — everything on the critical path is event-driven, so this timer being throttled in the background is fine.
+### 1. Auto-advance without a timer
 
-`extension/pip-inject.js` is injected on demand by the popup's "Picture-in-Picture this page" button via `scripting.executeScript`, on whatever tab is active. It picks the best candidate video (currently playing, then largest visible, then just decoded enough), and tries the native PiP APIs; if the page has had zero user interaction yet, those calls are silently gesture-gated, so it falls back to a small on-page button that performs the request from a genuine click.
+Safari clamps `setInterval` to ≥1 s and suspends it entirely for hidden or
+occluded tabs, so any poll-based "check if the Short ended, click next" loop
+dies in the background. Instead, `content.js` installs **capture-phase media
+listeners on `document`** at `document_start`:
+
+```js
+document.addEventListener('ended', onEnded, true);      // fires per Short, timer-free
+document.addEventListener('timeupdate', keepLoopOff, true); // re-defeat YouTube's per-video loop
+```
+
+Media events are driven by the browser's media pipeline, not the timer queue,
+so they keep firing while the video plays — even hidden, even in PiP. On
+`ended`, the extension advances; a loop-restart guard catches the case where
+YouTube's own `loop=true` wins the race.
+
+### 2. Background audio: `loadVideoById`, not scroll
+
+YouTube advances Shorts with a **compositor-driven scroll animation**, and the
+compositor is frozen for hidden tabs — so clicking *next* or pressing ArrowDown
+queues a scroll that only completes when you look at the tab again. Regular
+`/watch` autoplay, by contrast, swaps the next video's *stream* into the same
+`<video>` element (no scroll), which is why it keeps working in the background.
+
+So in a hidden tab the extension does the same thing to Shorts: it reads the
+page-world player (`document.getElementById('shorts-player')`) and calls
+`loadVideoById(nextId)` to swap the stream in place — no scroll, no navigation.
+The upcoming Short IDs come from YouTube's own `reel_watch_sequence` endpoint,
+seeded by a `sequenceParams` value **constructed from the current video ID**
+(it's base64 protobuf: `[0x0a,0x0b] + videoId + a constant tail`), so it's
+reliable even on cold loads where the page globals are empty.
+
+### 3. Background Shorts in PiP: playlist + the "bounce"
+
+This is the one nobody else does, because two Safari facts fight you:
+
+- **Any programmatic stream swap closes or blanks PiP.** `loadVideoById` tears
+  the PiP window down; a playlist advance leaves the window "active" but
+  **blank** — audio plays, frames decode, nothing paints.
+- **Only YouTube's native playlist autoplay** advances without navigating away
+  (which would close PiP with a "leaving this page" prompt).
+
+The fix is two-part:
+
+1. **A temporary playlist of Shorts.** One tap builds
+   `https://www.youtube.com/watch_videos?video_ids=…` (up to 50 IDs) from the
+   reel sequence — extracting **only** `reelWatchEndpoint` video IDs, because
+   grabbing every `videoId` in the response pulls in recommended *landscape*
+   videos and pollutes the feed. YouTube's native playlist autoplay then
+   advances through the Shorts in the regular player, which can hold a PiP
+   session.
+2. **The PiP bounce.** After each advance the window is blank, so the extension
+   exits PiP and immediately re-enters it — `webkitSetPresentationMode('inline')`
+   then `('picture-in-picture')` — which forces Safari to build a **fresh,
+   rendering** PiP surface. Crucially this works **while Safari is hidden**,
+   because Safari lifts the user-gesture requirement for PiP after your first
+   manual entry.
+
+```js
+// on each advance, once the user has entered PiP:
+video.webkitSetPresentationMode('inline');          // force the drop
+// …then poll until Safari lets us back in (it refuses until teardown finishes):
+const reenter = () => video.webkitPresentationMode === 'picture-in-picture'
+  ? done()
+  : (video.webkitSetPresentationMode('picture-in-picture'), setTimeout(reenter, 150));
+```
+
+There's an unavoidable **~1.5-second flicker** between Shorts: that's Safari's
+own PiP teardown time, and it physically refuses to re-open the window faster —
+verified by trying every timing. Since Shorts are 15–60 s each, it's one brief
+flicker per Short.
+
+### How this was figured out
+
+Rather than guess at YouTube's internals, the whole thing was reverse-engineered
+against a live, logged-in Safari tab driven by AppleScript. The harness in
+[`test/`](test/) runs JavaScript in the real page and reads back the result:
+
+```bash
+./test/run-async-in-safari.sh test/probe-buildlist.js   # e.g. builds a clean 50-Short playlist
+```
+
+It needs Safari → Settings → Developer → **"Allow JavaScript from Apple
+Events"**. It's how every claim above ("the advance blanks PiP", "re-entry
+takes ~1.5 s", "the sequence seed is the videoId") was measured instead of
+assumed.
+
+## Permissions
+
+`["storage", "activeTab", "scripting"]` plus a host permission for
+`www.youtube.com`.
+
+- **On youtube.com**, the first toolbar click shows Safari's per-site
+  permission sheet — choose **"Always Allow on This Website"** (one-time). The
+  content script does nothing until then.
+- **On other sites**, only `activeTab` is used — Safari grants it silently for
+  the current tab when you click the toolbar icon, for the "PiP this page"
+  button.
 
 ## Troubleshooting
 
-- **Extension isn't picking up changes after a rebuild**: toggle it off and back on in Safari → Settings → Extensions.
-- **"Unable to find X in the extension's resources"**: the Xcode project references each root-level file in `extension/` individually — if you ADD a new top-level file there, you must also add it to the Xcode project's extension-target Resources (folders like `images/` and `popup/` are whole-folder references and pick up new files automatically).
-- **"Allow unsigned extensions" turned itself off**: this Safari Developer setting resets every time Safari quits when using ad-hoc signing. Re-enable it, or sign with your own Apple ID team instead (see step 3 above) for a setting that persists.
-- **Toggle/settings don't seem to apply**: Safari profiles each have their own separate `storage.local` (and their own separate extension enablement) — check you're changing the setting in the profile you're actually browsing in.
-- **Popup shows "Safari blocked this page…"**: this is expected on the Safari start page, most `file://`/PDF views, and any page where the extension hasn't been granted access yet.
+- **Changes not showing after a rebuild** — toggle the extension off/on in
+  Safari → Settings → Extensions.
+- **"Allow unsigned extensions" keeps turning off** — that's expected; it
+  resets on every Safari quit. Sign with your own Apple ID team (Install step
+  b2) for a setting that persists.
+- **PiP shows black after an advance** — it should re-render within ~1.5 s (the
+  bounce). If it stays black, your build predates the bounce fix — rebuild from
+  `main`.
+- **Background Shorts plays a landscape video** — you're on a stale playlist
+  from an older build; the current build extracts Shorts-only IDs.
+- **Settings don't apply** — Safari profiles each keep their own `storage`;
+  check you're in the profile you're browsing in.
+
+## Not on the App Store
+
+This is a local, non-notarized build with no App Store distribution planned —
+build it from source (Install above). Don't attach a built `.app` to a GitHub
+Release: a personal-team build isn't Developer-ID-signed or notarized, so
+Gatekeeper blocks it on other Macs.
+
+## Repo layout
+
+```
+extension/          WebExtension source — the single source of truth
+  manifest.json     MV3, no background page beyond the icon/PiP worker
+  content.js        auto-advance, background loadVideoById, the PiP bounce
+  background.js     toolbar icon sync + MAIN-world reel/loadVideoById injection
+  pip-inject.js     universal "PiP this page"
+  popup/            toolbar popup (toggle, buttons, countdown)
+  images/           generated icons (tile + template toolbar glyphs)
+assets/, scripts/   icon.svg + PIL generators (icons and these README images)
+xcode/              committed Safari wrapper project (open & run)
+test/               AppleScript harness that cracked the PiP behaviour
+```
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE)

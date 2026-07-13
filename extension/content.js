@@ -92,14 +92,24 @@
   const checkStall = (v) => {
     stallTimer = null;
     if (!enabled || !isOnShorts()) return;
+    if (stallRetryCount >= 3) {
+      log('stall recovery: gave up after 3 retries');
+      return;
+    }
     if (v.paused && !v.ended) {
-      if (stallRetryCount >= 3) {
-        log('stall recovery: gave up after 3 retries');
-        return;
-      }
       stallRetryCount += 1;
       log(`stall recovery: play() retry ${stallRetryCount}/3`);
       v.play().catch(() => {});
+      scheduleStallCheck(v);
+    } else if (v.ended) {
+      // The next-button click was swallowed (happens in PiP-placeholder
+      // mode) — escalate to the keyboard shortcut instead of waiting for
+      // the 5s watchdog to re-click the same dead button.
+      stallRetryCount += 1;
+      log(`stall recovery: advance didn't take, ArrowDown escalation ${stallRetryCount}/3`);
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true })
+      );
       scheduleStallCheck(v);
     }
   };
@@ -325,6 +335,31 @@
           /* old element may already be dead — fine */
         }
         restorePictureInPicture(v);
+      } else if (pipVideoElement === v) {
+        // Same element, new stream: WebKit's PiP window goes BLACK when the
+        // media under an in-PiP element is swapped — the element still
+        // reports picture-in-picture, but the window's video layer is
+        // detached. Bounce the presentation mode to force a reattach.
+        pipRestoreAttemptedForAdvance = true;
+        log('PiP refresh: bouncing presentation mode to reattach the video layer');
+        try {
+          v.webkitSetPresentationMode('inline');
+        } catch (err) {
+          /* fall through to the re-enter below either way */
+        }
+        setTimeout(() => {
+          try {
+            v.webkitSetPresentationMode('picture-in-picture');
+          } catch (err) {
+            /* verified below */
+          }
+          setTimeout(() => {
+            if (!isElementInPiP(v)) {
+              log('PiP refresh: re-entry was rejected — showing restore toast');
+              showRestoreToast(v);
+            }
+          }, 300);
+        }, 120);
       }
     }
   };

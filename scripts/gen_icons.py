@@ -187,45 +187,23 @@ def downscale(master: Image.Image, size: int) -> Image.Image:
 # ---------------------------------------------------------------------------
 
 def render_toolbar_glyph(target_size: int, supersample: int = 16) -> Image.Image:
-    """Filled circle, solid black, with a down-pointing play triangle knocked
-    OUT (transparent) of its center — the play triangle rotated 90 degrees
-    doubles as a down/scroll arrow ("play as scroll" pun), so one shape reads
-    as both "video" and "auto-advance". A single filled mass with no gaps or
-    thin strokes is the most robust silhouette at 16px in a crowded toolbar
-    (chosen over a "Short" frame with a knocked-out play triangle, and a
-    fused chevron+triangle mark, which collapsed into an ambiguous blob at
-    16px — see assets/toolbar-candidates.png for the compared alternatives)."""
+    """The full-color brand tile, supersampled down to toolbar size.
+
+    Deliberately NOT a black+alpha template glyph: shipping a color icon
+    opts out of Safari's monochrome template tinting, so the toolbar shows
+    the same red play-tile as the extension's logo everywhere else — the
+    user explicitly chose brand consistency over native tinting."""
     ss = target_size * supersample
-    diameter = ss * 0.92
-    cx, cy = ss * 0.5, ss * 0.5
-
-    circle_mask = Image.new("L", (ss, ss), 0)
-    ImageDraw.Draw(circle_mask).ellipse(
-        [cx - diameter / 2, cy - diameter / 2, cx + diameter / 2, cy + diameter / 2], fill=255
-    )
-
-    tri_half_w = diameter * 0.235
-    tri_half_h = diameter * 0.26
-    tri_cy = cy - diameter * 0.02  # slight upward optical nudge (apex mass points down)
-    tri_pts = rounded_polygon(
-        [(cx - tri_half_w, tri_cy - tri_half_h), (cx + tri_half_w, tri_cy - tri_half_h), (cx, tri_cy + tri_half_h)],
-        radius=ss * 0.01, curve_samples=8,
-    )
-    tri_mask = Image.new("L", (ss, ss), 0)
-    ImageDraw.Draw(tri_mask).polygon(tri_pts, fill=255)
-
-    final_mask = ImageChops.subtract(circle_mask, tri_mask)
-    img = Image.new("RGBA", (ss, ss), (0, 0, 0, 0))
-    img.paste((0, 0, 0, 255), (0, 0), final_mask)
-    return img.resize((target_size, target_size), Image.LANCZOS)
+    hi = render_master(ss, CORNER_RADIUS / BASE)
+    return hi.resize((target_size, target_size), Image.LANCZOS)
 
 
-def tint_glyph_white(glyph: Image.Image) -> Image.Image:
-    """Simulate how Safari would render a template image in a dark toolbar,
-    for the preview contact sheet only (not part of the shipped assets)."""
-    r, g, b, a = glyph.split()
-    white = Image.new("L", glyph.size, 255)
-    return Image.merge("RGBA", (white, white, white, a))
+def make_inactive(icon: Image.Image) -> Image.Image:
+    """Grey/translucent variant of the toolbar tile, shown while the
+    auto-scroll toggle is OFF (background.js swaps between the two)."""
+    grey = icon.convert("L")
+    alpha = icon.split()[-1].point(lambda v: v * 55 // 100)
+    return Image.merge("RGBA", (grey, grey, grey, alpha))
 
 
 # ---------------------------------------------------------------------------
@@ -275,8 +253,8 @@ def build_preview(color_master: Image.Image, toolbar_glyphs: dict, out_path: Pat
     items_dark = [
         ("icon-512", items_light[0][1]),
         ("icon-48", items_light[1][1]),
-        ("toolbar-38", tint_glyph_white(toolbar_glyphs[38]).resize((cell, cell), Image.NEAREST)),
-        ("toolbar-16", tint_glyph_white(toolbar_glyphs[16]).resize((cell, cell), Image.NEAREST)),
+        ("toolbar-38-off", make_inactive(toolbar_glyphs[38]).resize((cell, cell), Image.NEAREST)),
+        ("toolbar-16-off", make_inactive(toolbar_glyphs[16]).resize((cell, cell), Image.NEAREST)),
     ]
 
     n = len(items_light)
@@ -360,6 +338,10 @@ def main() -> None:
         glyph.save(out_path)
         print(f"wrote {out_path}")
         written.append(out_path)
+        off_path = extension_images_dir / f"toolbar-{size}-off.png"
+        make_inactive(glyph).save(off_path)
+        print(f"wrote {off_path}")
+        written.append(off_path)
 
     # --- Contact sheet ---
     build_preview(rounded_master, toolbar_glyphs, preview_path)
@@ -376,6 +358,7 @@ def main() -> None:
         expected_sizes[extension_images_dir / f"icon-{size}.png"] = size
     for size in TOOLBAR_SIZES:
         expected_sizes[extension_images_dir / f"toolbar-{size}.png"] = size
+        expected_sizes[extension_images_dir / f"toolbar-{size}-off.png"] = size
     for size in APPICON_SIZES:
         expected_sizes[appicon_dir / f"icon-{size}.png"] = size
 

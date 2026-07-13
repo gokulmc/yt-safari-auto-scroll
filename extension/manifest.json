@@ -20,6 +20,9 @@
       "38": "images/toolbar-38.png"
     }
   },
+  "background": {
+    "service_worker": "background.js"
+  },
   "permissions": ["storage", "activeTab", "scripting"],
   "content_scripts": [
     {

@@ -547,7 +547,7 @@
           log('bg-shorts: could not build playlist', JSON.stringify(res || {}));
           return;
         }
-        log(`bg-shorts: built playlist of ${ids.length} Shorts, navigating`);
+        log(`bg-shorts: built playlist of ${ids.length} Shorts (seed: ${res.source}), navigating`);
         try { sessionStorage.setItem(BG_PLAYLIST_FLAG, '1'); } catch (e) {}
         location.href = 'https://www.youtube.com/watch_videos?video_ids=' + ids.join(',');
       })

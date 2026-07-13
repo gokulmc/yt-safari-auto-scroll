@@ -176,15 +176,6 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       const ctx = cfg ? cfg.get('INNERTUBE_CONTEXT') : null;
       if (!apiKey || !ctx) return { ok: false, reason: 'no-innertube-config' };
 
-      // Construct the reel sequence seed from the current videoId — reliable
-      // regardless of whether ytInitialReelWatchSequenceResponse populated
-      // (it doesn't on hard navigations). sequenceParams is base64 protobuf:
-      // field1=videoId, then a constant tail.
-      const seqBytes = [0x0a, 0x0b]
-        .concat(Array.from(cur).map((c) => c.charCodeAt(0)))
-        .concat([0x2a, 0x02, 0x18, 0x06, 0x50, 0x19, 0x68, 0x00]);
-      const seqParams = btoa(String.fromCharCode.apply(null, seqBytes));
-
       const fetchSeq = async (body) => {
         const res = await fetch(
           `https://www.youtube.com/youtubei/v1/reel/reel_watch_sequence?key=${apiKey}&prettyPrint=false`,
@@ -195,17 +186,46 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 
       const ids = [];
       let token = null;
-      try {
-        const first = await fetchSeq({ sequenceParams: seqParams });
-        for (const id of reelIdsFrom(first)) if (!ids.includes(id)) ids.push(id);
-        token = digToken(first.continuationEndpoint, 0);
-      } catch (e) {
-        return { ok: false, reason: 'seed-fetch-failed: ' + e };
+
+      // Prefer the user's REAL personalized reel sequence — it's in
+      // ytInitialReelWatchSequenceResponse while they're browsing the Shorts
+      // feed. A sequenceParams seed CONSTRUCTED from just the videoId loses
+      // that personalization and returns generic, repetitive content (the
+      // "it repeats social videos" bug). Only fall back to the constructed
+      // seed if the real one isn't there (e.g. a cold/hard load).
+      const rwsr = window.ytInitialReelWatchSequenceResponse;
+      let source = 'none';
+      if (rwsr) {
+        const seed = reelIdsFrom(rwsr);
+        if (seed.length) {
+          source = 'ytInitialReelWatchSequenceResponse';
+          for (const id of seed) if (!ids.includes(id)) ids.push(id);
+          token = digToken(rwsr.continuationEndpoint, 0);
+        }
+      }
+      if (!ids.length) {
+        source = 'constructed-seqParams';
+        const seqBytes = [0x0a, 0x0b]
+          .concat(Array.from(cur).map((c) => c.charCodeAt(0)))
+          .concat([0x2a, 0x02, 0x18, 0x06, 0x50, 0x19, 0x68, 0x00]);
+        const seqParams = btoa(String.fromCharCode.apply(null, seqBytes));
+        try {
+          const first = await fetchSeq({ sequenceParams: seqParams });
+          for (const id of reelIdsFrom(first)) if (!ids.includes(id)) ids.push(id);
+          token = digToken(first.continuationEndpoint, 0);
+        } catch (e) {
+          return { ok: false, reason: 'seed-fetch-failed: ' + e };
+        }
       }
 
+      // Chain the personalized continuation, but STOP once it stops yielding
+      // new videos — padding with a looping/exhausted sequence is exactly
+      // what makes the playlist feel repetitive.
       let guard = 0;
-      while (ids.length < 50 && token && guard < 8) {
+      let dryRounds = 0;
+      while (ids.length < 50 && token && guard < 12 && dryRounds < 2) {
         guard += 1;
+        const before = ids.length;
         try {
           const more = await fetchSeq({ continuation: token });
           for (const id of reelIdsFrom(more)) if (!ids.includes(id)) ids.push(id);
@@ -213,11 +233,12 @@ browser.runtime.onMessage.addListener((msg, sender) => {
         } catch (e) {
           break;
         }
+        dryRounds = ids.length > before ? 0 : dryRounds + 1;
       }
 
       // Current Short first, then the clean upcoming reels, capped at 50.
       const ordered = Array.from(new Set([cur].concat(ids))).slice(0, 50);
-      return { ok: true, ids: ordered, count: ordered.length };
+      return { ok: true, ids: ordered, count: ordered.length, source };
     });
   }
 });

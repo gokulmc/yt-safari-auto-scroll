@@ -142,10 +142,26 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   // that plays Shorts hands-free in background PiP (verified).
   if (msg.type === 'build-shorts-playlist') {
     return injectMain(tabId, async () => {
-      // Extract ONLY reel videoIds (inside a reelWatchEndpoint) — extracting
-      // every "videoId" in the response pulls in recommended/promoted
-      // LANDSCAPE videos, which polluted the playlist.
+      // An entry is UNLISTED if it carries "isUnlisted":true or an "Unlisted"
+      // badge — but NOT when it just has "isUnlisted":false (strip that first).
+      const isUnlistedEntry = (e) => {
+        const s = JSON.stringify(e);
+        if (/"isUnlisted"\s*:\s*true/i.test(s)) return true;
+        return /unlisted/i.test(s.replace(/"isUnlisted"\s*:\s*false/gi, ''));
+      };
+      // Extract reel videoIds. Prefer the per-entry list so we can DROP
+      // unlisted videos; only extract `reelWatchEndpoint.videoId` (grabbing
+      // every "videoId" pulls in recommended LANDSCAPE videos). Fall back to a
+      // generic walk when there's no entries array.
       const reelIdsFrom = (obj) => {
+        if (obj && Array.isArray(obj.entries)) {
+          const ids = [];
+          for (const e of obj.entries) {
+            const id = e && e.command && e.command.reelWatchEndpoint && e.command.reelWatchEndpoint.videoId;
+            if (id && !isUnlistedEntry(e)) ids.push(id);
+          }
+          return Array.from(new Set(ids));
+        }
         const ids = [];
         const walk = (o, d) => {
           if (!o || typeof o !== 'object' || d > 10) return;

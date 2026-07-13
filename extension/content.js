@@ -253,6 +253,46 @@
     log('PiP restore: injected click-to-restore toast (automatic attempts failed silently)');
   };
 
+  // Big, centered, unmissable one-click PiP prompt. Used on a fresh watch
+  // page where scripted PiP is gesture-gated — a small corner toast was
+  // easy to miss, so this is deliberately front-and-center.
+  const GESTURE_PROMPT_ID = 'yt-sas-gesture-prompt';
+  const showGesturePrompt = (v) => {
+    const existing = document.getElementById(GESTURE_PROMPT_ID);
+    if (existing) existing.remove();
+
+    const btn = document.createElement('button');
+    btn.id = GESTURE_PROMPT_ID;
+    btn.type = 'button';
+    btn.textContent = '▶  Start background Shorts (Picture-in-Picture)';
+    Object.assign(btn.style, {
+      position: 'fixed',
+      top: '50%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+      zIndex: '2147483647',
+      background: '#ff0033',
+      color: '#fff',
+      border: 'none',
+      padding: '18px 28px',
+      borderRadius: '12px',
+      font: '600 16px/1.3 -apple-system, BlinkMacSystemFont, sans-serif',
+      cursor: 'pointer',
+      boxShadow: '0 6px 28px rgba(0,0,0,0.5)',
+    });
+    btn.addEventListener(
+      'click',
+      () => {
+        btn.remove();
+        if (typeof v.webkitSetPresentationMode === 'function') v.webkitSetPresentationMode('picture-in-picture');
+        if (typeof v.requestPictureInPicture === 'function') v.requestPictureInPicture().catch(() => {});
+      },
+      { once: true }
+    );
+    document.body.appendChild(btn);
+    log('shorts-continuation: showing one-click PiP prompt (scripted PiP is gesture-gated on a fresh page)');
+  };
+
   const tryRequestPictureInPicture = (v) => {
     if (typeof v.requestPictureInPicture !== 'function') {
       showRestoreToast(v);
@@ -606,6 +646,7 @@
   // PiP included. Shorts can never do this (compositor-scroll advance), so
   // this converts the current Short onto that machinery.
   const WATCH_MODE_FLAG = 'yt-sas-watch-mode-pip';
+  const SHORTS_QUEUE_KEY = 'yt-sas-shorts-queue';
 
   browser.runtime.onMessage.addListener((msg) => {
     if (!msg || msg.type !== 'watch-mode-pip') return;
@@ -616,33 +657,84 @@
     }
     const v = document.querySelector(SELECTORS.activeVideo) || document.querySelector(SELECTORS.fallbackVideo);
     const t = v && v.currentTime > 1 ? `&t=${Math.floor(v.currentTime)}s` : '';
-    try {
-      sessionStorage.setItem(WATCH_MODE_FLAG, '1');
-    } catch (err) {
-      /* storage may be blocked; the navigation is still worth doing */
-    }
-    log('watch-mode: converting Short to watch page for native auto-next');
-    location.href = `https://www.youtube.com/watch?v=${id}${t}`;
+    // Build a queue of upcoming SHORT ids so the watch page keeps playing
+    // Shorts (via loadVideoById) rather than YouTube's landscape autoplay.
+    browser.runtime
+      .sendMessage({ type: 'get-next-shorts' })
+      .then((res) => {
+        const ids = (res && res.ids) || [];
+        log(`watch-mode: got ${ids.length} upcoming Shorts`, JSON.stringify((res && res.diag) || {}));
+        try {
+          sessionStorage.setItem(WATCH_MODE_FLAG, '1');
+          sessionStorage.setItem(SHORTS_QUEUE_KEY, JSON.stringify(ids));
+        } catch (err) {
+          /* storage may be blocked; navigation is still worth doing */
+        }
+        location.href = `https://www.youtube.com/watch?v=${id}${t}`;
+      })
+      .catch((err) => {
+        log('watch-mode: queue fetch failed, going anyway', String(err));
+        try {
+          sessionStorage.setItem(WATCH_MODE_FLAG, '1');
+        } catch (e) {
+          /* ignore */
+        }
+        location.href = `https://www.youtube.com/watch?v=${id}${t}`;
+      });
   });
 
-  const maybeEnterWatchModePip = () => {
+  // On the watch page after a watch-mode handoff: pop into PiP, then keep
+  // playing the queued Shorts by swapping each next id into the SAME player
+  // element on `ended`. All three pieces — the media `ended` event, the
+  // runtime message, and loadVideoById — stay alive in a hidden tab, and
+  // reusing the element preserves the PiP window. This is the only path
+  // that plays Shorts hands-free in the background.
+  const startShortsContinuation = () => {
     let flagged = false;
+    let queue = [];
     try {
       flagged = sessionStorage.getItem(WATCH_MODE_FLAG) === '1';
+      queue = JSON.parse(sessionStorage.getItem(SHORTS_QUEUE_KEY) || '[]');
     } catch (err) {
       return;
     }
     if (!flagged || !location.pathname.startsWith('/watch')) return;
     try {
       sessionStorage.removeItem(WATCH_MODE_FLAG);
+      sessionStorage.removeItem(SHORTS_QUEUE_KEY);
     } catch (err) {
       /* ignore */
     }
+    log(`shorts-continuation: active with ${queue.length} queued Shorts`);
+
+    let qIndex = 0;
+    let advancing = false;
+    const onWatchEnded = (e) => {
+      if (!(e.target instanceof HTMLVideoElement) || advancing) return;
+      if (!e.target.closest('#movie_player')) return;
+      if (qIndex >= queue.length) {
+        log('shorts-continuation: queue exhausted');
+        return;
+      }
+      advancing = true;
+      const nextId = queue[qIndex++];
+      log(`shorts-continuation: loading next Short ${nextId} (${qIndex}/${queue.length})`);
+      browser.runtime
+        .sendMessage({ type: 'load-video-by-id', videoId: nextId })
+        .then((r) => log('shorts-continuation: loadVideoById →', JSON.stringify(r)))
+        .catch((err) => log('shorts-continuation: loadVideoById failed', String(err)))
+        .finally(() => setTimeout(() => (advancing = false), 800));
+    };
+    document.addEventListener('ended', onWatchEnded, true);
+
+    // Enter PiP once the player video is ready. Scripted PiP is gesture-
+    // gated on a fresh document, so fall back to a prominent one-click
+    // prompt.
     let attempts = 0;
-    const attempt = () => {
+    const enter = () => {
       const v = document.querySelector('#movie_player video') || document.querySelector('video.html5-main-video');
       if (!v || v.readyState < 2) {
-        if ((attempts += 1) < 20) setTimeout(attempt, 500);
+        if ((attempts += 1) < 20) setTimeout(enter, 500);
         return;
       }
       if (typeof v.webkitSetPresentationMode === 'function') {
@@ -654,18 +746,15 @@
       }
       setTimeout(() => {
         if (isElementInPiP(v)) {
-          log('watch-mode: PiP entered automatically — YouTube autoplay takes it from here');
+          log('shorts-continuation: PiP entered automatically');
         } else {
-          // Fresh document = no user gesture yet; scripted PiP is gated.
-          // One click on the toast is a genuine gesture.
-          showRestoreToast(v, 'Click to pop this video into Picture-in-Picture');
-          log('watch-mode: scripted PiP was gesture-gated — showing one-click toast');
+          showGesturePrompt(v);
         }
       }, 400);
     };
-    attempt();
+    enter();
   };
-  maybeEnterWatchModePip();
+  startShortsContinuation();
 
   // ---- SPA nav --------------------------------------------------------------
   // YouTube is a SPA; entering/leaving Shorts and scrolling between Shorts

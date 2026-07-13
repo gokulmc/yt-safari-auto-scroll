@@ -106,5 +106,93 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     .catch((err) => ({ ok: false, reason: String(err) }));
 });
 
+const injectMain = (tabId, func, args) =>
+  browser.scripting
+    .executeScript({ target: { tabId }, world: 'MAIN', func, args: args || [] })
+    .then((r) => (r && r[0] ? r[0].result : null))
+    .catch((err) => ({ ok: false, reason: String(err) }));
+
+browser.runtime.onMessage.addListener((msg, sender) => {
+  const tabId = sender && sender.tab && sender.tab.id;
+  if (!msg || typeof tabId !== 'number') return;
+
+  // Build the queue of upcoming Short videoIds via YouTube's own
+  // reel_watch_sequence innertube endpoint (fetch — alive in hidden tabs).
+  // This is what lets us keep playing SHORTS in a background watch-page
+  // player instead of the landscape recommendations autoplay serves.
+  if (msg.type === 'get-next-shorts') {
+    return injectMain(tabId, async () => {
+      const out = { ids: [] };
+      const cfg = window.ytcfg && typeof window.ytcfg.get === 'function' ? window.ytcfg : null;
+      const apiKey = cfg ? cfg.get('INNERTUBE_API_KEY') : null;
+      const ctx = cfg ? cfg.get('INNERTUBE_CONTEXT') : null;
+
+      const seqParams = [];
+      const seen = new Set();
+      const walk = (o, d) => {
+        if (!o || typeof o !== 'object' || d > 12 || seen.has(o)) return;
+        seen.add(o);
+        for (const k of Object.keys(o)) {
+          if (k === 'sequenceParams' && typeof o[k] === 'string') seqParams.push(o[k]);
+          if (o[k] && typeof o[k] === 'object') walk(o[k], d + 1);
+        }
+      };
+      try {
+        if (window.ytInitialData) walk(window.ytInitialData, 0);
+      } catch (e) {
+        /* ignore */
+      }
+      out.diag = { hasApiKey: !!apiKey, hasContext: !!ctx, seqParams: seqParams.length };
+
+      if (apiKey && ctx && seqParams[0]) {
+        try {
+          const res = await fetch(
+            `https://www.youtube.com/youtubei/v1/reel/reel_watch_sequence?key=${apiKey}&prettyPrint=false`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ context: ctx, sequenceParams: seqParams[0] }),
+              credentials: 'include',
+            }
+          );
+          const json = await res.json();
+          const ids = [];
+          const walkIds = (o, d) => {
+            if (!o || typeof o !== 'object' || d > 8) return;
+            for (const k of Object.keys(o)) {
+              if (k === 'videoId' && typeof o[k] === 'string') ids.push(o[k]);
+              else if (o[k] && typeof o[k] === 'object') walkIds(o[k], d + 1);
+            }
+          };
+          walkIds(json, 0);
+          const cur = (location.pathname.match(/\/shorts\/([^/?]+)/) || [])[1] || null;
+          out.ids = Array.from(new Set(ids)).filter((x) => x !== cur);
+          out.diag.status = res.status;
+        } catch (e) {
+          out.diag.fetchError = String(e);
+        }
+      }
+      return out;
+    });
+  }
+
+  // Swap the next Short's stream into the watch-page player element —
+  // preserves the PiP session (bound to that element) and works hidden.
+  if (msg.type === 'load-video-by-id' && msg.videoId) {
+    return injectMain(
+      tabId,
+      (videoId) => {
+        const p = document.getElementById('movie_player');
+        if (p && typeof p.loadVideoById === 'function') {
+          p.loadVideoById(videoId);
+          return { ok: true };
+        }
+        return { ok: false, reason: 'no-loadVideoById' };
+      },
+      [msg.videoId]
+    );
+  }
+});
+
 // Also run on every worker wake — setIcon state doesn't survive restarts.
 syncIcon();

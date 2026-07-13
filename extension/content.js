@@ -594,20 +594,24 @@
       if (!pipDesired || bouncing) return;
       bouncing = true;
       advanceInProgress = true;
-      // Safari drops PiP to inline on the advance and refuses re-entry until it
-      // finishes tearing down the old surface (~1.5s — a hard floor). Wait for
-      // the drop, then re-enter the instant Safari allows it. No fixed pre-delay
-      // and no redundant exit, so the flicker is only Safari's transition time.
-      let sawDrop = false;
+      // The advance leaves PiP "active" but BLANK — the mode stays
+      // picture-in-picture and nothing paints, so waiting for a drop that
+      // never comes leaves it black forever (confirmed: it only renders once
+      // the user manually closes PiP, which supplies the inline transition).
+      // So we force the exit to inline ourselves, then re-enter the instant
+      // Safari finishes tearing down the old surface (~1.5s hard floor).
+      const v0 = document.querySelector('#movie_player video');
+      try { if (v0) v0.webkitSetPresentationMode('inline'); } catch (e) {}
+      let sawInline = false;
       let tries = 0;
       const poll = () => {
         const vid = document.querySelector('#movie_player video');
         if (!vid) { bouncing = false; advanceInProgress = false; return; }
         const mode = vid.webkitPresentationMode;
         if (mode !== 'picture-in-picture') {
-          sawDrop = true;
+          sawInline = true;
           try { vid.webkitSetPresentationMode('picture-in-picture'); } catch (e) {}
-        } else if (sawDrop) {
+        } else if (sawInline) {
           bouncing = false;
           advanceInProgress = false;
           log('bg-shorts: re-entered PiP after advance → ' + id);
@@ -616,7 +620,7 @@
         if ((tries += 1) < 24) setTimeout(poll, 150);
         else { bouncing = false; advanceInProgress = false; }
       };
-      poll();
+      setTimeout(poll, 100);
     };
     // Trigger on the EARLIEST advance signal so the re-entry lands right at
     // Safari's floor: the new video's loadstart/emptied/playing, or the SPA nav.

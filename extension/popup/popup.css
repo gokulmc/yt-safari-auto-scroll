@@ -117,6 +117,22 @@ body {
   background: var(--border);
 }
 
+.pip-button.primary {
+  border-color: #ff0033;
+  color: #ff0033;
+  font-weight: 600;
+}
+
+.pip-button.primary:hover {
+  background: rgba(255, 0, 51, 0.1);
+}
+
+.pip-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+  background: transparent;
+}
+
 .pip-message {
   margin: 8px 0 0;
   font-size: 12px;

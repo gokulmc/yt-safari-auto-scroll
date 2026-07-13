@@ -64,8 +64,27 @@ enabledToggle.addEventListener('change', () => {
 // content script, which navigates to watch_videos and prompts for PiP.
 // YouTube's native playlist autoplay then advances through real Shorts
 // with PiP preserved, even in the background.
+const BG_SETUP_SECONDS = 10; // fixed reassurance countdown while it sets up
 bgShortsButton.addEventListener('click', () => {
   pipMessage.hidden = true;
+  const label = bgShortsButton.textContent;
+  bgShortsButton.disabled = true;
+  pipButton.disabled = true;
+  // Setting up a background Shorts playlist takes several seconds (fetch the
+  // Shorts, load the playlist player, enter PiP). Show a countdown so people
+  // know to wait rather than thinking nothing happened.
+  let remaining = BG_SETUP_SECONDS;
+  bgShortsButton.textContent = `Setting up… ${remaining}s`;
+  const timer = setInterval(() => {
+    remaining -= 1;
+    if (remaining > 0) {
+      bgShortsButton.textContent = `Setting up… ${remaining}s`;
+    } else {
+      clearInterval(timer);
+      window.close();
+    }
+  }, 1000);
+
   browser.tabs
     .query({ active: true, currentWindow: true })
     .then((tabs) => {
@@ -73,8 +92,13 @@ bgShortsButton.addEventListener('click', () => {
       if (!tab || typeof tab.id !== 'number') throw new Error('no active tab');
       return browser.tabs.sendMessage(tab.id, { type: 'background-shorts-pip' });
     })
-    .then(() => window.close())
-    .catch(() => showPipMessage('Open a youtube.com Short first, then tap this to start a background Shorts playlist.'));
+    .catch(() => {
+      clearInterval(timer);
+      bgShortsButton.disabled = false;
+      pipButton.disabled = false;
+      bgShortsButton.textContent = label;
+      showPipMessage('Open a youtube.com Short first, then tap this to start a background Shorts playlist.');
+    });
 });
 
 pipButton.addEventListener('click', () => {

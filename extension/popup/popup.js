@@ -11,12 +11,50 @@ const showPipMessage = (text) => {
   pipMessage.hidden = false;
 };
 
+// Set the toolbar icon from here as well as background.js: Safari doesn't
+// reliably wake the background worker for storage.onChanged, but the popup
+// is guaranteed to be alive at the exact moment the toggle changes.
+const TOOLBAR_SIZES = [16, 19, 32, 38];
+
+const setToolbarIcon = (enabled) => {
+  const suffix = enabled ? '' : '-off';
+  const paths = Object.fromEntries(TOOLBAR_SIZES.map((s) => [s, `images/toolbar-${s}${suffix}.png`]));
+  return browser.action
+    .setIcon({ path: paths })
+    .catch(() => {
+      // Safari has been flaky about path-based setIcon — hand over raw
+      // pixels drawn on a canvas instead.
+      const loads = TOOLBAR_SIZES.map(
+        (size) =>
+          new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+              const c = document.createElement('canvas');
+              c.width = size;
+              c.height = size;
+              const ctx = c.getContext('2d');
+              ctx.drawImage(img, 0, 0, size, size);
+              resolve([size, ctx.getImageData(0, 0, size, size)]);
+            };
+            img.onerror = () => resolve(null);
+            img.src = browser.runtime.getURL(`images/toolbar-${size}${suffix}.png`);
+          })
+      );
+      return Promise.all(loads).then((pairs) =>
+        browser.action.setIcon({ imageData: Object.fromEntries(pairs.filter(Boolean)) })
+      );
+    })
+    .catch(() => {});
+};
+
 browser.storage.local.get({ enabled: true }).then((res) => {
   enabledToggle.checked = res.enabled;
+  setToolbarIcon(res.enabled); // re-sync in case background.js never ran
 });
 
 enabledToggle.addEventListener('change', () => {
   browser.storage.local.set({ enabled: enabledToggle.checked });
+  setToolbarIcon(enabledToggle.checked);
 });
 
 pipButton.addEventListener('click', () => {

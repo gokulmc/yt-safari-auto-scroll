@@ -557,12 +557,46 @@
   // On the resulting watch_videos playlist page, offer a one-click PiP start
   // (scripted PiP is gesture-gated on a fresh page). Once the user is in PiP
   // and backgrounds Safari, YouTube's playlist autoplay does the rest.
-  const maybeShowPlaylistPipPrompt = () => {
+  const setupPlaylistBgPip = () => {
     let flagged = false;
     try { flagged = sessionStorage.getItem(BG_PLAYLIST_FLAG) === '1'; } catch (e) { return; }
     if (!flagged || !location.pathname.startsWith('/watch')) return;
     try { sessionStorage.removeItem(BG_PLAYLIST_FLAG); } catch (e) {}
 
+    // The core of background Shorts in PiP: Safari BLANKS the PiP window on
+    // an in-place source change (which every playlist advance is) — audio
+    // keeps playing but nothing paints. The fix is to bounce PiP (exit to
+    // inline, then re-enter) right after each advance: that forces a fresh,
+    // rendering PiP surface. It works even while Safari is hidden because
+    // the gesture requirement is lifted after the first PiP entry. Verified
+    // end-to-end against a live backgrounded tab.
+    const currentVid = () => { try { return new URLSearchParams(location.search).get('v'); } catch (e) { return null; } };
+    let bouncedForId = currentVid(); // don't bounce the first (fresh, rendering) entry
+    let bouncing = false;
+    const bounceIfAdvanced = () => {
+      const v = document.querySelector('#movie_player video');
+      if (!v || bouncing) return;
+      const inPip = v.webkitPresentationMode === 'picture-in-picture' || document.pictureInPictureElement === v;
+      if (!inPip) return;
+      const id = currentVid();
+      if (!id || id === bouncedForId) return;
+      bouncedForId = id;
+      bouncing = true;
+      try { v.webkitSetPresentationMode('inline'); } catch (e) {}
+      setTimeout(() => {
+        try { v.webkitSetPresentationMode('picture-in-picture'); } catch (e) {}
+        setTimeout(() => { bouncing = false; }, 300);
+      }, 250);
+      log('bg-shorts: bounced PiP to re-render after advance → ' + id);
+    };
+    // A playlist advance reuses the player element, changes the URL's v=,
+    // and fires `playing` for the new video. Trigger the bounce on both.
+    document.addEventListener('playing', (e) => {
+      if (e.target instanceof HTMLVideoElement && e.target.closest('#movie_player')) setTimeout(bounceIfAdvanced, 500);
+    }, true);
+    document.addEventListener('yt-navigate-finish', () => setTimeout(bounceIfAdvanced, 500));
+
+    // One-click PiP prompt (scripted PiP is gesture-gated on a fresh page).
     const PROMPT_ID = 'yt-sas-bg-pip-prompt';
     let attempts = 0;
     const show = () => {
@@ -585,6 +619,7 @@
       });
       btn.addEventListener('click', () => {
         btn.remove();
+        bouncedForId = currentVid();
         if (typeof v.webkitSetPresentationMode === 'function') v.webkitSetPresentationMode('picture-in-picture');
         else if (typeof v.requestPictureInPicture === 'function') v.requestPictureInPicture().catch(() => {});
       }, { once: true });
@@ -593,7 +628,7 @@
     };
     show();
   };
-  maybeShowPlaylistPipPrompt();
+  setupPlaylistBgPip();
 
   // ---- SPA nav --------------------------------------------------------------
   // YouTube is a SPA; entering/leaving Shorts and scrolling between Shorts

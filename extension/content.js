@@ -647,6 +647,7 @@
   // this converts the current Short onto that machinery.
   const WATCH_MODE_FLAG = 'yt-sas-watch-mode-pip';
   const SHORTS_QUEUE_KEY = 'yt-sas-shorts-queue';
+  const SHORTS_DIAG_KEY = 'yt-sas-shorts-diag';
 
   browser.runtime.onMessage.addListener((msg) => {
     if (!msg || msg.type !== 'watch-mode-pip') return;
@@ -667,6 +668,9 @@
         try {
           sessionStorage.setItem(WATCH_MODE_FLAG, '1');
           sessionStorage.setItem(SHORTS_QUEUE_KEY, JSON.stringify(ids));
+          // Persist the queue-build diagnostics across the navigation so
+          // they're visible in the (fresh) watch-page console.
+          sessionStorage.setItem(SHORTS_DIAG_KEY, JSON.stringify((res && res.diag) || {}));
         } catch (err) {
           /* storage may be blocked; navigation is still worth doing */
         }
@@ -699,13 +703,19 @@
       return;
     }
     if (!flagged || !location.pathname.startsWith('/watch')) return;
+    let diag = '{}';
     try {
+      diag = sessionStorage.getItem(SHORTS_DIAG_KEY) || '{}';
       sessionStorage.removeItem(WATCH_MODE_FLAG);
       sessionStorage.removeItem(SHORTS_QUEUE_KEY);
+      sessionStorage.removeItem(SHORTS_DIAG_KEY);
     } catch (err) {
       /* ignore */
     }
-    log(`shorts-continuation: active with ${queue.length} queued Shorts`);
+    log(`shorts-continuation: active with ${queue.length} queued Shorts — queue-build diag:`, diag);
+    if (queue.length === 0) {
+      log('shorts-continuation: EMPTY QUEUE → watch-page autoplay will serve landscape. Diag above shows why.');
+    }
 
     let qIndex = 0;
     let advancing = false;

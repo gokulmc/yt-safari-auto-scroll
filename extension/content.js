@@ -123,7 +123,14 @@
           log('stall recovery 2/3: clicking next reel anchor', anchor.getAttribute('href'));
           anchor.click();
         } else {
-          log('stall recovery 2/3: no next-reel /shorts/ anchor found in DOM');
+          // No anchors in the Shorts DOM (confirmed live) — ask the
+          // background worker to read the next reel's videoId from
+          // YouTube's component data in the page's MAIN world and
+          // click-navigate to it.
+          browser.runtime
+            .sendMessage({ type: 'advance-shorts' })
+            .then((res) => log('stall recovery 2/3: main-world navigation →', JSON.stringify(res)))
+            .catch((err) => log('stall recovery 2/3: main-world navigation failed', String(err)));
         }
       } else {
         log('stall recovery 3/3: arming visibilitychange retry');

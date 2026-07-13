@@ -211,13 +211,13 @@
   // ---- PiP restore --------------------------------------------------------
   const TOAST_ID = 'yt-auto-scroll-pip-restore-toast';
 
-  const showRestoreToast = (v) => {
+  const showRestoreToast = (v, text) => {
     const existing = document.getElementById(TOAST_ID);
     if (existing) existing.remove();
 
     const toast = document.createElement('div');
     toast.id = TOAST_ID;
-    toast.textContent = 'Click to restore Picture-in-Picture';
+    toast.textContent = text || 'Click to restore Picture-in-Picture';
     Object.assign(toast.style, {
       position: 'fixed',
       bottom: '24px',
@@ -598,6 +598,74 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', scanForActiveVideo, { once: true });
   }
+
+  // ---- Watch-mode PiP: Shorts → /watch handoff ------------------------------
+  // A watch page swaps the next video's stream into the SAME <video>
+  // element (timers+fetch — alive in hidden tabs), and PiP is bound to the
+  // element, so YouTube's own autoplay advances forever, background and
+  // PiP included. Shorts can never do this (compositor-scroll advance), so
+  // this converts the current Short onto that machinery.
+  const WATCH_MODE_FLAG = 'yt-sas-watch-mode-pip';
+
+  browser.runtime.onMessage.addListener((msg) => {
+    if (!msg || msg.type !== 'watch-mode-pip') return;
+    const id = (location.pathname.match(/\/shorts\/([^/?]+)/) || [])[1];
+    if (!id) {
+      log('watch-mode: not on a /shorts/ page, ignoring');
+      return;
+    }
+    const v = document.querySelector(SELECTORS.activeVideo) || document.querySelector(SELECTORS.fallbackVideo);
+    const t = v && v.currentTime > 1 ? `&t=${Math.floor(v.currentTime)}s` : '';
+    try {
+      sessionStorage.setItem(WATCH_MODE_FLAG, '1');
+    } catch (err) {
+      /* storage may be blocked; the navigation is still worth doing */
+    }
+    log('watch-mode: converting Short to watch page for native auto-next');
+    location.href = `https://www.youtube.com/watch?v=${id}${t}`;
+  });
+
+  const maybeEnterWatchModePip = () => {
+    let flagged = false;
+    try {
+      flagged = sessionStorage.getItem(WATCH_MODE_FLAG) === '1';
+    } catch (err) {
+      return;
+    }
+    if (!flagged || !location.pathname.startsWith('/watch')) return;
+    try {
+      sessionStorage.removeItem(WATCH_MODE_FLAG);
+    } catch (err) {
+      /* ignore */
+    }
+    let attempts = 0;
+    const attempt = () => {
+      const v = document.querySelector('#movie_player video') || document.querySelector('video.html5-main-video');
+      if (!v || v.readyState < 2) {
+        if ((attempts += 1) < 20) setTimeout(attempt, 500);
+        return;
+      }
+      if (typeof v.webkitSetPresentationMode === 'function') {
+        try {
+          v.webkitSetPresentationMode('picture-in-picture');
+        } catch (err) {
+          /* verified below */
+        }
+      }
+      setTimeout(() => {
+        if (isElementInPiP(v)) {
+          log('watch-mode: PiP entered automatically — YouTube autoplay takes it from here');
+        } else {
+          // Fresh document = no user gesture yet; scripted PiP is gated.
+          // One click on the toast is a genuine gesture.
+          showRestoreToast(v, 'Click to pop this video into Picture-in-Picture');
+          log('watch-mode: scripted PiP was gesture-gated — showing one-click toast');
+        }
+      }, 400);
+    };
+    attempt();
+  };
+  maybeEnterWatchModePip();
 
   // ---- SPA nav --------------------------------------------------------------
   // YouTube is a SPA; entering/leaving Shorts and scrolling between Shorts

@@ -4,6 +4,7 @@
 
 const enabledToggle = document.getElementById('enabled-toggle');
 const pipButton = document.getElementById('pip-button');
+const watchModeButton = document.getElementById('watch-mode-button');
 const pipMessage = document.getElementById('pip-message');
 
 const showPipMessage = (text) => {
@@ -57,6 +58,23 @@ browser.storage.local.get({ enabled: true }).then((res) => {
 enabledToggle.addEventListener('change', () => {
   browser.storage.local.set({ enabled: enabledToggle.checked });
   setToolbarIcon(enabledToggle.checked);
+});
+
+// Shorts advance by a compositor scroll that WebKit freezes in hidden
+// tabs; watch-page autoplay swaps streams in the same <video> element
+// (timers+fetch — background-safe, and the PiP window follows the
+// element). This button moves the current Short onto that machinery.
+watchModeButton.addEventListener('click', () => {
+  pipMessage.hidden = true;
+  browser.tabs
+    .query({ active: true, currentWindow: true })
+    .then((tabs) => {
+      const tab = tabs[0];
+      if (!tab || typeof tab.id !== 'number') throw new Error('no active tab');
+      return browser.tabs.sendMessage(tab.id, { type: 'watch-mode-pip' });
+    })
+    .then(() => window.close())
+    .catch(() => showPipMessage('Open a youtube.com Short first — this converts it to a watch page with auto-next.'));
 });
 
 pipButton.addEventListener('click', () => {

@@ -36,6 +36,7 @@
   let advanceMechanism = null;
 
   let pipActive = false;
+  let pipVideoElement = null;
   let pipArmedForAdvance = false;
   let pipRestoreAttemptedForAdvance = false;
 
@@ -68,6 +69,12 @@
   // Must NOT match inactive/preload reels — YouTube keeps neighboring
   // ytd-reel-video-renderer elements (and their <video>s) around off-screen.
   const isActiveShortsVideo = (v) => {
+    // A video that is literally in the PiP window is what the user is
+    // watching, wherever YouTube has re-parented it — when a Short enters
+    // PiP, YouTube swaps a placeholder into the reel renderer and can move
+    // the real <video> out of it, which would fail both checks below and
+    // make us ignore its `ended` entirely (no advance, ever, in PiP).
+    if (isElementInPiP(v)) return true;
     if (v === currentVideo) return true;
     return v.closest('ytd-reel-video-renderer[is-active], #shorts-player') !== null;
   };
@@ -249,6 +256,7 @@
   // ---- PiP tracking ---------------------------------------------------------
   const handlePipLeft = (v) => {
     pipActive = false;
+    pipVideoElement = null;
     const now = Date.now();
     const coincidesWithAdvance = advancePending || now - lastAdvanceTime < 3000;
     if (!coincidesWithAdvance) {
@@ -263,6 +271,7 @@
   const onEnterPiP = (e) => {
     if (!(e.target instanceof HTMLVideoElement)) return;
     pipActive = true;
+    pipVideoElement = e.target;
     log('entered PiP');
   };
 
@@ -276,8 +285,9 @@
     if (!(v instanceof HTMLVideoElement)) return;
     if (v.webkitPresentationMode === 'picture-in-picture') {
       pipActive = true;
+      pipVideoElement = v;
       log('entered PiP (webkitpresentationmodechanged)');
-    } else if (pipActive) {
+    } else if (pipActive && v === pipVideoElement) {
       handlePipLeft(v);
     }
   };
@@ -296,17 +306,61 @@
     // element/src change (i.e. navigation caused it, not a user close),
     // and only once per advance — timing-only heuristics misclassify a
     // user hitting the PiP ✕ right after an advance happens to land.
-    if (pipArmedForAdvance && videoOrSrcChanged && !pipRestoreAttemptedForAdvance && !pipActive) {
-      pipRestoreAttemptedForAdvance = true;
-      restorePictureInPicture(v);
+    if (pipArmedForAdvance && videoOrSrcChanged && !pipRestoreAttemptedForAdvance) {
+      if (!pipActive) {
+        pipRestoreAttemptedForAdvance = true;
+        restorePictureInPicture(v);
+      } else if (pipVideoElement && pipVideoElement !== v) {
+        // PiP never "dropped" — it's still parked on the previous Short's
+        // now-dead element. Hand the window over to the new video.
+        pipRestoreAttemptedForAdvance = true;
+        log('PiP handoff: moving PiP from the old video element to the new one');
+        try {
+          if (typeof pipVideoElement.webkitSetPresentationMode === 'function') {
+            pipVideoElement.webkitSetPresentationMode('inline');
+          } else if (document.pictureInPictureElement === pipVideoElement) {
+            document.exitPictureInPicture().catch(() => {});
+          }
+        } catch (err) {
+          /* old element may already be dead — fine */
+        }
+        restorePictureInPicture(v);
+      }
     }
   };
 
   const onVideoEnded = (e) => {
     const v = e.target;
     if (!(v instanceof HTMLVideoElement)) return;
-    if (!enabled || !isOnShorts() || !isActiveShortsVideo(v)) return;
+    if (!enabled || !isOnShorts()) return;
+    if (!isActiveShortsVideo(v)) {
+      // Diagnostic: an `ended` we chose to ignore is the prime suspect
+      // whenever "it just stopped advancing" gets reported.
+      log('ended ignored — video failed the active-video gate', {
+        inPiP: isElementInPiP(v),
+        isCurrent: v === currentVideo,
+        duration: v.duration,
+      });
+      return;
+    }
     advance(v, 'ended');
+  };
+
+  // Safari doesn't reliably deliver the PiP entry events to document-level
+  // listeners (and PiP may predate script injection entirely), so state is
+  // also synced from the live element on every media event — the events
+  // above are just the fast path.
+  const syncPipStateFromElement = (v) => {
+    if (isElementInPiP(v)) {
+      if (!pipActive || pipVideoElement !== v) {
+        pipActive = true;
+        pipVideoElement = v;
+        log('PiP detected via live element state');
+      }
+    } else if (pipActive && v === pipVideoElement) {
+      handlePipLeft(v);
+      log('PiP exit detected via live element state');
+    }
   };
 
   const onMediaState = (e) => {
@@ -316,6 +370,8 @@
     if (e.type === 'durationchange' || e.type === 'loadedmetadata') {
       lastTimeByVideo.delete(v);
     }
+
+    syncPipStateFromElement(v);
 
     if (!enabled || !isOnShorts() || !isActiveShortsVideo(v)) return;
 

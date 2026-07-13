@@ -28,7 +28,7 @@ import json
 import math
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 # ---------------------------------------------------------------------------
 # Shared coordinate constants — mirror assets/icon.svg (1024x1024 space).
@@ -186,50 +186,37 @@ def downscale(master: Image.Image, size: int) -> Image.Image:
 # Toolbar template glyphs (black on transparent, no tile)
 # ---------------------------------------------------------------------------
 
-def render_toolbar_glyph(target_size: int, double_chevron: bool, supersample: int = 16) -> Image.Image:
-    """Independently-proportioned glyph (not just a downscale of the color
-    master) so it stays legible at 16-38px: bigger/bolder triangle, sharp
-    (unrounded) corners since rounding eats too much of a shape this small,
-    a clear gap before the chevron, and single-vs-double chevron by size."""
+def render_toolbar_glyph(target_size: int, supersample: int = 16) -> Image.Image:
+    """Filled circle, solid black, with a down-pointing play triangle knocked
+    OUT (transparent) of its center — the play triangle rotated 90 degrees
+    doubles as a down/scroll arrow ("play as scroll" pun), so one shape reads
+    as both "video" and "auto-advance". A single filled mass with no gaps or
+    thin strokes is the most robust silhouette at 16px in a crowded toolbar
+    (chosen over a "Short" frame with a knocked-out play triangle, and a
+    fused chevron+triangle mark, which collapsed into an ambiguous blob at
+    16px — see assets/toolbar-candidates.png for the compared alternatives)."""
     ss = target_size * supersample
+    diameter = ss * 0.92
+    cx, cy = ss * 0.5, ss * 0.5
+
+    circle_mask = Image.new("L", (ss, ss), 0)
+    ImageDraw.Draw(circle_mask).ellipse(
+        [cx - diameter / 2, cy - diameter / 2, cx + diameter / 2, cy + diameter / 2], fill=255
+    )
+
+    tri_half_w = diameter * 0.235
+    tri_half_h = diameter * 0.26
+    tri_cy = cy - diameter * 0.02  # slight upward optical nudge (apex mass points down)
+    tri_pts = rounded_polygon(
+        [(cx - tri_half_w, tri_cy - tri_half_h), (cx + tri_half_w, tri_cy - tri_half_h), (cx, tri_cy + tri_half_h)],
+        radius=ss * 0.01, curve_samples=8,
+    )
+    tri_mask = Image.new("L", (ss, ss), 0)
+    ImageDraw.Draw(tri_mask).polygon(tri_pts, fill=255)
+
+    final_mask = ImageChops.subtract(circle_mask, tri_mask)
     img = Image.new("RGBA", (ss, ss), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-
-    # The symmetric chevron needs no optical correction, so it sits at the true
-    # canvas center; the play triangle's bounding-box center aligns to the
-    # chevron's center plus a 1% rightward optical nudge (its visual mass is
-    # left-heavy). Nudging both together reads like a flag on a pole at small
-    # sizes. (This differs from the tile design, where only the triangle is
-    # nudged ~4% right within a much larger canvas.)
-    cx_chev = ss * 0.50
-    cx_tri = ss * (0.50 + 0.01)
-
-    tri_half_w = ss * 0.20
-    tri_half_h = ss * 0.22
-    tri_cy = ss * 0.33
-    tri_top = (cx_tri - tri_half_w, tri_cy - tri_half_h)
-    tri_apex = (cx_tri + tri_half_w, tri_cy)
-    tri_bottom = (cx_tri - tri_half_w, tri_cy + tri_half_h)
-    tri_poly = rounded_polygon([tri_top, tri_apex, tri_bottom], radius=0, curve_samples=1)
-    draw.polygon(tri_poly, fill=BLACK_OPAQUE)
-
-    half_w = ss * 0.25
-    depth = ss * 0.15
-    stroke = ss * 0.15
-    gap = ss * 0.09
-    top1_y = (tri_cy + tri_half_h) + gap
-
-    if double_chevron:
-        c1 = [(cx_chev - half_w, top1_y), (cx_chev, top1_y + depth), (cx_chev + half_w, top1_y)]
-        draw_thick_polyline(draw, c1, stroke, BLACK_OPAQUE)
-        top2_y = top1_y + depth + ss * 0.05
-        c2 = [(cx_chev - half_w, top2_y), (cx_chev, top2_y + depth), (cx_chev + half_w, top2_y)]
-        draw_thick_polyline(draw, c2, stroke, (0, 0, 0, round(255 * CHEVRON2_OPACITY)))
-    else:
-        # Single chevron — double chevron is illegible at 16/19px.
-        c = [(cx_chev - half_w, top1_y), (cx_chev, top1_y + depth), (cx_chev + half_w, top1_y)]
-        draw_thick_polyline(draw, c, stroke, BLACK_OPAQUE)
-
+    img.paste((0, 0, 0, 255), (0, 0), final_mask)
     return img.resize((target_size, target_size), Image.LANCZOS)
 
 
@@ -325,7 +312,6 @@ def build_preview(color_master: Image.Image, toolbar_glyphs: dict, out_path: Pat
 
 EXTENSION_ICON_SIZES = [48, 96, 128, 256, 512]
 TOOLBAR_SIZES = [16, 19, 32, 38]
-TOOLBAR_DOUBLE_CHEVRON = {16: False, 19: False, 32: True, 38: True}
 APPICON_SIZES = [16, 32, 64, 128, 256, 512, 1024]
 
 
@@ -368,7 +354,7 @@ def main() -> None:
     # --- Toolbar template glyphs -> extension/images/toolbar-*.png ---
     toolbar_glyphs: dict[int, Image.Image] = {}
     for size in TOOLBAR_SIZES:
-        glyph = render_toolbar_glyph(size, double_chevron=TOOLBAR_DOUBLE_CHEVRON[size])
+        glyph = render_toolbar_glyph(size)
         toolbar_glyphs[size] = glyph
         out_path = extension_images_dir / f"toolbar-{size}.png"
         glyph.save(out_path)
@@ -405,7 +391,31 @@ def main() -> None:
 
     print(f"\n{contents_path.relative_to(repo_root)} present: {contents_path.exists()}")
     print(f"{preview_path.relative_to(repo_root)} present: {preview_path.exists()}")
-    print(f"\nAll sizes correct: {all_ok}")
+
+    # --- Toolbar glyph alpha-bbox centering check ---
+    # A template image that's off-center reads as "broken" in a real toolbar
+    # even if every pixel is otherwise correct, so check the non-transparent
+    # bounding box sits within a small tolerance of the canvas center.
+    print("\nToolbar glyph alpha-bbox centering:")
+    header2 = f"{'file':30s} {'bbox':>18s} {'dx':>6s} {'dy':>6s} {'ok':>4s}"
+    print(header2)
+    print("-" * len(header2))
+    tol_frac = 0.06  # allow 6% of canvas size of offset
+    for size in TOOLBAR_SIZES:
+        path = extension_images_dir / f"toolbar-{size}.png"
+        with Image.open(path) as im:
+            alpha = im.split()[-1]
+            bbox = alpha.getbbox()
+        cx = (bbox[0] + bbox[2]) / 2
+        cy = (bbox[1] + bbox[3]) / 2
+        dx = cx - size / 2
+        dy = cy - size / 2
+        tol = tol_frac * size
+        ok = abs(dx) <= tol and abs(dy) <= tol
+        all_ok = all_ok and ok
+        print(f"{path.name:30s} {str(bbox):>18s} {dx:>6.2f} {dy:>6.2f} {'OK' if ok else 'FAIL':>4s}")
+
+    print(f"\nAll sizes correct and toolbar glyphs centered: {all_ok}")
 
 
 if __name__ == "__main__":

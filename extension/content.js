@@ -97,12 +97,20 @@
       log('stall recovery: gave up after 3 retries');
       return;
     }
-    if (v.paused && !v.ended) {
-      stallRetryCount += 1;
-      log(`stall recovery: play() retry ${stallRetryCount}/3`);
-      v.play().catch(() => {});
-      scheduleStallCheck(v);
-    } else if (v.ended && location.pathname === advanceFromPathname) {
+    const navigated = location.pathname !== advanceFromPathname;
+    if (navigated) {
+      // Navigation took — the only remaining stall is the NEW video
+      // sitting paused. (Never play() before navigation: on an ended
+      // video it restarts the OLD Short from zero and masquerades as a
+      // successful advance.)
+      const nv = currentVideo || v;
+      if (nv.paused && !nv.ended) {
+        stallRetryCount += 1;
+        log(`stall recovery: post-navigation play() retry ${stallRetryCount}/3`);
+        nv.play().catch(() => {});
+        scheduleStallCheck(nv);
+      }
+    } else {
       // The advance didn't take (URL unchanged). Both the next button and
       // ArrowDown drive a scroll-snap animation, and hidden tabs have
       // rAF/IntersectionObserver frozen — the scroll only completes when
@@ -158,7 +166,7 @@
     document.addEventListener(
       'visibilitychange',
       () => {
-        if (!document.hidden && enabled && isOnShorts() && currentVideo && currentVideo.ended) {
+        if (!document.hidden && enabled && isOnShorts() && currentVideo && location.pathname === advanceFromPathname) {
           advance(currentVideo, 'visibility-retry');
         }
       },
@@ -361,8 +369,13 @@
     stallRetryCount = 0;
 
     if (advancePending) {
-      log(`advance confirmed via ${advanceMechanism}`);
-      advancePending = false;
+      if (location.pathname !== advanceFromPathname) {
+        log(`advance confirmed via ${advanceMechanism}`);
+        advancePending = false;
+      }
+      // else: this 'playing' came from the OLD video (a nudge or YouTube's
+      // loop restarting it) — the URL hasn't moved, so it is NOT an
+      // advance confirmation.
     }
 
     // Auto-restore only when the PiP drop coincided with an actual
@@ -591,9 +604,16 @@
 
     currentVideo.loop = false; // re-assert in case something reset it
 
-    // Only nudge while an advance is still unconfirmed — an unconditional
-    // play() here would fight the user's own pause every 5 seconds.
-    if (advancePending && currentVideo.paused && !currentVideo.ended && currentVideo.readyState >= 2) {
+    // Only nudge while an advance is still unconfirmed AND navigation has
+    // actually happened — an unconditional play() would fight the user's
+    // own pause, and a pre-navigation play() restarts the old ended Short.
+    if (
+      advancePending &&
+      location.pathname !== advanceFromPathname &&
+      currentVideo.paused &&
+      !currentVideo.ended &&
+      currentVideo.readyState >= 2
+    ) {
       currentVideo.play().catch(() => {});
     }
 

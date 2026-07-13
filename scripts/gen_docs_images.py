@@ -15,12 +15,14 @@ ICON = ROOT / "extension" / "images" / "icon-512.png"
 
 RED = (255, 0, 51)
 RED_DK = (143, 0, 22)
-BG_TOP = (18, 18, 22)
-BG_BOT = (10, 10, 12)
-WHITE = (245, 245, 247)
-MUTED = (150, 150, 158)
-CARD = (26, 26, 31)
-CARD_BORDER = (44, 44, 52)
+# Light theme — blends into GitHub's white page (and reads as a clean light
+# card in dark mode).
+BG_TOP = (255, 255, 255)
+BG_BOT = (244, 244, 247)
+INK = (17, 17, 20)         # near-black headings
+MUTED = (108, 108, 118)    # secondary text
+CARD = (248, 248, 251)
+CARD_BORDER = (226, 226, 232)
 
 SS = 2  # supersample
 
@@ -54,17 +56,17 @@ def rgba_paste_shadow(canvas, img, xy, blur_offset, ss):
     sd = ImageDraw.Draw(sh)
     pad = 8 * ss
     sd.rounded_rectangle([x - pad, y - pad + blur_offset, x + img.width + pad, y + img.height + pad + blur_offset],
-                         radius=64 * ss, fill=(0, 0, 0, 90))
+                         radius=64 * ss, fill=(0, 0, 0, 40))
     canvas.alpha_composite(sh)
     canvas.alpha_composite(img, (x, y))
 
 def hero():
     W, H = 1200 * SS, 470 * SS
     canvas = vgradient(W, H, BG_TOP, BG_BOT).convert("RGBA")
-    # soft red glow top-left
+    # faint red glow, upper-left, very subtle on white
     glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     gd = ImageDraw.Draw(glow)
-    gd.ellipse([-200 * SS, -260 * SS, 520 * SS, 300 * SS], fill=(255, 0, 51, 26))
+    gd.ellipse([-260 * SS, -300 * SS, 480 * SS, 240 * SS], fill=(255, 0, 51, 14))
     canvas.alpha_composite(glow)
 
     # logo tile
@@ -76,7 +78,7 @@ def hero():
     text_x = tx + tile.width + 70 * SS
     # wordmark (two lines, tight)
     f_title = font(BOLD, 84 * SS)
-    d.text((text_x, 150 * SS), "YT Shorts", font=f_title, fill=WHITE)
+    d.text((text_x, 150 * SS), "YT Shorts", font=f_title, fill=INK)
     d.text((text_x, 240 * SS), "Auto-Scroll", font=f_title, fill=RED)
     # tagline
     f_tag = font(REG, 30 * SS)
@@ -125,7 +127,7 @@ def glyph_pip(d, cx, cy, s, color):
 
 def modes():
     W, H = 1200 * SS, 300 * SS
-    canvas = vgradient(W, H, (15, 15, 18), (12, 12, 14)).convert("RGB")
+    canvas = vgradient(W, H, BG_TOP, BG_BOT).convert("RGB")
     d = ImageDraw.Draw(canvas)
     cards = [
         (glyph_play, "Auto-scroll", ["Advances to the next Short", "the moment one ends."]),
@@ -143,11 +145,11 @@ def modes():
         x0 = pad + i * (cw + gap)
         d.rounded_rectangle([x0, cy0, x0 + cw, cy0 + ch], radius=22 * SS,
                             fill=CARD, outline=CARD_BORDER, width=2 * SS)
-        # glyph in a red circle
+        # glyph in a light-red circle
         gcx, gcy = x0 + 56 * SS, cy0 + 58 * SS
-        d.ellipse([gcx - 34 * SS, gcy - 34 * SS, gcx + 34 * SS, gcy + 34 * SS], fill=(40, 16, 22))
+        d.ellipse([gcx - 34 * SS, gcy - 34 * SS, gcx + 34 * SS, gcy + 34 * SS], fill=(255, 232, 236))
         g(d, gcx, gcy, 40 * SS, RED)
-        d.text((x0 + 34 * SS, cy0 + 100 * SS), title, font=f_h, fill=WHITE)
+        d.text((x0 + 34 * SS, cy0 + 100 * SS), title, font=f_h, fill=INK)
         for j, ln in enumerate(lines):
             d.text((x0 + 34 * SS, cy0 + 146 * SS + j * 32 * SS), ln, font=f_b, fill=MUTED)
     out = canvas.resize((1200, 300), Image.LANCZOS)

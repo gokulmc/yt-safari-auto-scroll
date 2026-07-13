@@ -582,11 +582,20 @@
       if (!id || id === bouncedForId) return;
       bouncedForId = id;
       bouncing = true;
+      // Exit to inline, then re-enter after a gap. The gap MUST be generous:
+      // a re-entry ~250ms after the advance fails to take (PiP ends up
+      // closed); ~800ms+ succeeds. Verify afterward and retry once.
       try { v.webkitSetPresentationMode('inline'); } catch (e) {}
       setTimeout(() => {
         try { v.webkitSetPresentationMode('picture-in-picture'); } catch (e) {}
-        setTimeout(() => { bouncing = false; }, 300);
-      }, 250);
+        setTimeout(() => {
+          const vid = document.querySelector('#movie_player video');
+          if (vid && vid.webkitPresentationMode !== 'picture-in-picture') {
+            try { vid.webkitSetPresentationMode('picture-in-picture'); } catch (e) {}
+          }
+          setTimeout(() => { bouncing = false; }, 600);
+        }, 700);
+      }, 900);
       log('bg-shorts: bounced PiP to re-render after advance → ' + id);
     };
     // A playlist advance reuses the player element, changes the URL's v=,

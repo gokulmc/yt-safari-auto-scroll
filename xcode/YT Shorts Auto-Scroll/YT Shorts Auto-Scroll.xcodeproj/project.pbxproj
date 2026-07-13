@@ -20,6 +20,7 @@
 		CD2C495C3004D6D60014D7C1 /* popup in Resources */ = {isa = PBXBuildFile; fileRef = CD2C49573004D6D60014D7C1 /* popup */; };
 		CD2C495D3004D6D60014D7C1 /* images in Resources */ = {isa = PBXBuildFile; fileRef = CD2C49583004D6D60014D7C1 /* images */; };
 		CD2C495E3004D6D60014D7C1 /* pip-inject.js in Resources */ = {isa = PBXBuildFile; fileRef = CD2C49593004D6D60014D7C1 /* pip-inject.js */; };
+		CD2C49F13004D6D60014D7C1 /* background.js in Resources */ = {isa = PBXBuildFile; fileRef = CD2C49F03004D6D60014D7C1 /* background.js */; };
 		CD2C495F3004D6D60014D7C1 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = CD2C495A3004D6D60014D7C1 /* manifest.json */; };
 		CD2C49603004D6D60014D7C1 /* content.js in Resources */ = {isa = PBXBuildFile; fileRef = CD2C495B3004D6D60014D7C1 /* content.js */; };
 /* End PBXBuildFile section */
@@ -65,6 +66,7 @@
 		CD2C49573004D6D60014D7C1 /* popup */ = {isa = PBXFileReference; lastKnownFileType = folder; name = popup; path = ../../../extension/popup; sourceTree = "<group>"; };
 		CD2C49583004D6D60014D7C1 /* images */ = {isa = PBXFileReference; lastKnownFileType = folder; name = images; path = ../../../extension/images; sourceTree = "<group>"; };
 		CD2C49593004D6D60014D7C1 /* pip-inject.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = "pip-inject.js"; path = "../../../extension/pip-inject.js"; sourceTree = "<group>"; };
+		CD2C49F03004D6D60014D7C1 /* background.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = "background.js"; path = "../../../extension/background.js"; sourceTree = "<group>"; };
 		CD2C495A3004D6D60014D7C1 /* manifest.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = manifest.json; path = ../../../extension/manifest.json; sourceTree = "<group>"; };
 		CD2C495B3004D6D60014D7C1 /* content.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; name = content.js; path = ../../../extension/content.js; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -145,6 +147,7 @@
 				CD2C49573004D6D60014D7C1 /* popup */,
 				CD2C49583004D6D60014D7C1 /* images */,
 				CD2C49593004D6D60014D7C1 /* pip-inject.js */,
+				CD2C49F03004D6D60014D7C1 /* background.js */,
 				CD2C495A3004D6D60014D7C1 /* manifest.json */,
 				CD2C495B3004D6D60014D7C1 /* content.js */,
 			);
@@ -253,6 +256,7 @@
 			files = (
 				CD2C495F3004D6D60014D7C1 /* manifest.json in Resources */,
 				CD2C495E3004D6D60014D7C1 /* pip-inject.js in Resources */,
+				CD2C49F13004D6D60014D7C1 /* background.js in Resources */,
 				CD2C495D3004D6D60014D7C1 /* images in Resources */,
 				CD2C495C3004D6D60014D7C1 /* popup in Resources */,
 				CD2C49603004D6D60014D7C1 /* content.js in Resources */,

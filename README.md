@@ -90,6 +90,7 @@ From there it's all reactive:
 ## Troubleshooting
 
 - **Extension isn't picking up changes after a rebuild**: toggle it off and back on in Safari → Settings → Extensions.
+- **"Unable to find X in the extension's resources"**: the Xcode project references each root-level file in `extension/` individually — if you ADD a new top-level file there, you must also add it to the Xcode project's extension-target Resources (folders like `images/` and `popup/` are whole-folder references and pick up new files automatically).
 - **"Allow unsigned extensions" turned itself off**: this Safari Developer setting resets every time Safari quits when using ad-hoc signing. Re-enable it, or sign with your own Apple ID team instead (see step 3 above) for a setting that persists.
 - **Toggle/settings don't seem to apply**: Safari profiles each have their own separate `storage.local` (and their own separate extension enablement) — check you're changing the setting in the profile you're actually browsing in.
 - **Popup shows "Safari blocked this page…"**: this is expected on the Safari start page, most `file://`/PDF views, and any page where the extension hasn't been granted access yet.

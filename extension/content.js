@@ -582,20 +582,24 @@
       if (!id || id === bouncedForId) return;
       bouncedForId = id;
       bouncing = true;
-      // Exit to inline, then re-enter after a gap. The gap MUST be generous:
-      // a re-entry ~250ms after the advance fails to take (PiP ends up
-      // closed); ~800ms+ succeeds. Verify afterward and retry once.
+      // Exit to inline, then poll-re-enter until it takes. Safari refuses the
+      // re-entry until it finishes tearing down the old PiP surface (~1.5s
+      // after the advance) — a fixed delay is fragile, so keep trying every
+      // 200ms until webkitPresentationMode reports we're back. This is the
+      // minimum-flicker, maximally-robust form (verified holding across
+      // consecutive advances while hidden). The ~1.5s gap between Shorts is
+      // Safari's PiP transition time and can't be shortened.
       try { v.webkitSetPresentationMode('inline'); } catch (e) {}
-      setTimeout(() => {
-        try { v.webkitSetPresentationMode('picture-in-picture'); } catch (e) {}
-        setTimeout(() => {
-          const vid = document.querySelector('#movie_player video');
-          if (vid && vid.webkitPresentationMode !== 'picture-in-picture') {
-            try { vid.webkitSetPresentationMode('picture-in-picture'); } catch (e) {}
-          }
-          setTimeout(() => { bouncing = false; }, 600);
-        }, 700);
-      }, 900);
+      let tries = 0;
+      const reenter = () => {
+        const vid = document.querySelector('#movie_player video');
+        if (!vid) { bouncing = false; return; }
+        if (vid.webkitPresentationMode === 'picture-in-picture') { bouncing = false; return; }
+        try { vid.webkitSetPresentationMode('picture-in-picture'); } catch (e) {}
+        if ((tries += 1) < 16) setTimeout(reenter, 200);
+        else bouncing = false;
+      };
+      setTimeout(reenter, 300);
       log('bg-shorts: bounced PiP to re-render after advance → ' + id);
     };
     // A playlist advance reuses the player element, changes the URL's v=,

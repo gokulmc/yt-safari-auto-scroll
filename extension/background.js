@@ -134,6 +134,92 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       return { ok: true, from: cur, to: next, queueLen: st.queue.length, index: idx + 1 };
     });
   }
+
+  // Gather up to ~50 upcoming Short ids (current first) so the popup can
+  // build a temporary watch_videos playlist. YouTube's native playlist
+  // autoplay then advances through these Shorts in the watch player,
+  // preserving an active PiP window even in a hidden tab — the one path
+  // that plays Shorts hands-free in background PiP (verified).
+  if (msg.type === 'build-shorts-playlist') {
+    return injectMain(tabId, async () => {
+      // Extract ONLY reel videoIds (inside a reelWatchEndpoint) — extracting
+      // every "videoId" in the response pulls in recommended/promoted
+      // LANDSCAPE videos, which polluted the playlist.
+      const reelIdsFrom = (obj) => {
+        const ids = [];
+        const walk = (o, d) => {
+          if (!o || typeof o !== 'object' || d > 10) return;
+          if (o.reelWatchEndpoint && o.reelWatchEndpoint.videoId) ids.push(o.reelWatchEndpoint.videoId);
+          for (const k of Object.keys(o)) if (o[k] && typeof o[k] === 'object') walk(o[k], d + 1);
+        };
+        walk(obj, 0);
+        return Array.from(new Set(ids));
+      };
+      const digToken = (o, d) => {
+        if (!o || typeof o !== 'object' || d > 8) return null;
+        for (const k of Object.keys(o)) {
+          if (k === 'token' && typeof o[k] === 'string') return o[k];
+          if (o[k] && typeof o[k] === 'object') {
+            const t = digToken(o[k], d + 1);
+            if (t) return t;
+          }
+        }
+        return null;
+      };
+
+      const p = document.getElementById('shorts-player');
+      const cur = p && p.getVideoData ? p.getVideoData().video_id : (location.pathname.match(/\/shorts\/([^/?]+)/) || [])[1];
+      if (!cur || cur.length !== 11) return { ok: false, reason: 'no-current-short' };
+
+      const cfg = window.ytcfg && typeof window.ytcfg.get === 'function' ? window.ytcfg : null;
+      const apiKey = cfg ? cfg.get('INNERTUBE_API_KEY') : null;
+      const ctx = cfg ? cfg.get('INNERTUBE_CONTEXT') : null;
+      if (!apiKey || !ctx) return { ok: false, reason: 'no-innertube-config' };
+
+      // Construct the reel sequence seed from the current videoId — reliable
+      // regardless of whether ytInitialReelWatchSequenceResponse populated
+      // (it doesn't on hard navigations). sequenceParams is base64 protobuf:
+      // field1=videoId, then a constant tail.
+      const seqBytes = [0x0a, 0x0b]
+        .concat(Array.from(cur).map((c) => c.charCodeAt(0)))
+        .concat([0x2a, 0x02, 0x18, 0x06, 0x50, 0x19, 0x68, 0x00]);
+      const seqParams = btoa(String.fromCharCode.apply(null, seqBytes));
+
+      const fetchSeq = async (body) => {
+        const res = await fetch(
+          `https://www.youtube.com/youtubei/v1/reel/reel_watch_sequence?key=${apiKey}&prettyPrint=false`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ context: ctx }, body)), credentials: 'include' }
+        );
+        return res.json();
+      };
+
+      const ids = [];
+      let token = null;
+      try {
+        const first = await fetchSeq({ sequenceParams: seqParams });
+        for (const id of reelIdsFrom(first)) if (!ids.includes(id)) ids.push(id);
+        token = digToken(first.continuationEndpoint, 0);
+      } catch (e) {
+        return { ok: false, reason: 'seed-fetch-failed: ' + e };
+      }
+
+      let guard = 0;
+      while (ids.length < 50 && token && guard < 8) {
+        guard += 1;
+        try {
+          const more = await fetchSeq({ continuation: token });
+          for (const id of reelIdsFrom(more)) if (!ids.includes(id)) ids.push(id);
+          token = digToken(more.continuationEndpoint, 0);
+        } catch (e) {
+          break;
+        }
+      }
+
+      // Current Short first, then the clean upcoming reels, capped at 50.
+      const ordered = Array.from(new Set([cur].concat(ids))).slice(0, 50);
+      return { ok: true, ids: ordered, count: ordered.length };
+    });
+  }
 });
 
 // Also run on every worker wake — setIcon state doesn't survive restarts.

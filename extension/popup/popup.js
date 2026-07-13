@@ -4,6 +4,7 @@
 
 const enabledToggle = document.getElementById('enabled-toggle');
 const pipButton = document.getElementById('pip-button');
+const bgShortsButton = document.getElementById('bg-shorts-button');
 const pipMessage = document.getElementById('pip-message');
 
 const showPipMessage = (text) => {
@@ -57,6 +58,23 @@ browser.storage.local.get({ enabled: true }).then((res) => {
 enabledToggle.addEventListener('change', () => {
   browser.storage.local.set({ enabled: enabledToggle.checked });
   setToolbarIcon(enabledToggle.checked);
+});
+
+// Build a temporary playlist of the upcoming Shorts and hand off to the
+// content script, which navigates to watch_videos and prompts for PiP.
+// YouTube's native playlist autoplay then advances through real Shorts
+// with PiP preserved, even in the background.
+bgShortsButton.addEventListener('click', () => {
+  pipMessage.hidden = true;
+  browser.tabs
+    .query({ active: true, currentWindow: true })
+    .then((tabs) => {
+      const tab = tabs[0];
+      if (!tab || typeof tab.id !== 'number') throw new Error('no active tab');
+      return browser.tabs.sendMessage(tab.id, { type: 'background-shorts-pip' });
+    })
+    .then(() => window.close())
+    .catch(() => showPipMessage('Open a youtube.com Short first, then tap this to start a background Shorts playlist.'));
 });
 
 pipButton.addEventListener('click', () => {

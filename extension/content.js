@@ -216,12 +216,13 @@
     clearStallTimer();
     attemptCounts.set(videoIdKey(), (attemptCounts.get(videoIdKey()) || 0) + 1);
 
-    // Hidden tab: the scroll/next-button advance is frozen by WebKit's
-    // rendering suspension, so swap the next Short's stream in place via
-    // the page-world player (loadVideoById) instead — proven to work while
-    // hidden and to keep an active PiP window alive. The visible-tab path
-    // below keeps the scroll UI correct when the user is actually looking.
-    if (document.hidden) {
+    // Hidden tab (and NOT in PiP): the scroll/next-button advance is frozen
+    // by WebKit's rendering suspension, so swap the next Short's stream in
+    // place via the page-world player (loadVideoById) — works while hidden,
+    // giving background audio of real Shorts. We skip this when a PiP window
+    // is active, because loadVideoById tears PiP down; the proper background
+    // PiP experience is the "Background Shorts (PiP)" playlist instead.
+    if (document.hidden && !isElementInPiP(v) && !pipActive) {
       advanceMechanism = 'loadVideoById (hidden)';
       log(`advance() reason=${reason} mechanism=${advanceMechanism}`);
       browser.runtime
@@ -524,6 +525,75 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', scanForActiveVideo, { once: true });
   }
+
+  // ---- Background Shorts (PiP) ----------------------------------------------
+  // Build a temporary watch_videos playlist of the upcoming Shorts and go
+  // there. YouTube's native playlist autoplay advances through the Shorts in
+  // the watch player on natural video-end, which — unlike loadVideoById —
+  // PRESERVES an active PiP window and works in a hidden tab (verified).
+  const BG_PLAYLIST_FLAG = 'yt-sas-bg-playlist';
+
+  browser.runtime.onMessage.addListener((msg) => {
+    if (!msg || msg.type !== 'background-shorts-pip') return;
+    if (!isOnShorts()) {
+      log('bg-shorts: not on a Short, ignoring');
+      return;
+    }
+    browser.runtime
+      .sendMessage({ type: 'build-shorts-playlist' })
+      .then((res) => {
+        const ids = res && res.ids;
+        if (!ids || !ids.length) {
+          log('bg-shorts: could not build playlist', JSON.stringify(res || {}));
+          return;
+        }
+        log(`bg-shorts: built playlist of ${ids.length} Shorts, navigating`);
+        try { sessionStorage.setItem(BG_PLAYLIST_FLAG, '1'); } catch (e) {}
+        location.href = 'https://www.youtube.com/watch_videos?video_ids=' + ids.join(',');
+      })
+      .catch((err) => log('bg-shorts: build failed', String(err)));
+  });
+
+  // On the resulting watch_videos playlist page, offer a one-click PiP start
+  // (scripted PiP is gesture-gated on a fresh page). Once the user is in PiP
+  // and backgrounds Safari, YouTube's playlist autoplay does the rest.
+  const maybeShowPlaylistPipPrompt = () => {
+    let flagged = false;
+    try { flagged = sessionStorage.getItem(BG_PLAYLIST_FLAG) === '1'; } catch (e) { return; }
+    if (!flagged || !location.pathname.startsWith('/watch')) return;
+    try { sessionStorage.removeItem(BG_PLAYLIST_FLAG); } catch (e) {}
+
+    const PROMPT_ID = 'yt-sas-bg-pip-prompt';
+    let attempts = 0;
+    const show = () => {
+      const v = document.querySelector('#movie_player video') || document.querySelector('video.html5-main-video');
+      if (!v || v.readyState < 2) {
+        if ((attempts += 1) < 25) setTimeout(show, 500);
+        return;
+      }
+      if (document.getElementById(PROMPT_ID)) return;
+      const btn = document.createElement('button');
+      btn.id = PROMPT_ID;
+      btn.type = 'button';
+      btn.textContent = '▶  Start background Shorts (Picture-in-Picture)';
+      Object.assign(btn.style, {
+        position: 'fixed', top: '76px', left: '50%', transform: 'translateX(-50%)',
+        zIndex: '2147483647', background: '#ff0033', color: '#fff', border: 'none',
+        padding: '14px 22px', borderRadius: '10px', cursor: 'pointer',
+        font: '600 15px/1.3 -apple-system, BlinkMacSystemFont, sans-serif',
+        boxShadow: '0 6px 24px rgba(0,0,0,0.45)',
+      });
+      btn.addEventListener('click', () => {
+        btn.remove();
+        if (typeof v.webkitSetPresentationMode === 'function') v.webkitSetPresentationMode('picture-in-picture');
+        else if (typeof v.requestPictureInPicture === 'function') v.requestPictureInPicture().catch(() => {});
+      }, { once: true });
+      document.body.appendChild(btn);
+      log('bg-shorts: showing one-click PiP prompt on the playlist page');
+    };
+    show();
+  };
+  maybeShowPlaylistPipPrompt();
 
   // ---- SPA nav --------------------------------------------------------------
   // YouTube is a SPA; entering/leaving Shorts and scrolling between Shorts

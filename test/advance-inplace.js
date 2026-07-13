@@ -59,6 +59,8 @@
   }
 
   if (!next) return { ok: false, reason: 'queue-exhausted', queueLen: st.queue.length };
+  const vEl = p.querySelector('video');
+  const pipBefore = vEl ? vEl.webkitPresentationMode : 'no-video';
   p.loadVideoById(next);
 
   const t0 = Date.now();
@@ -68,10 +70,13 @@
     if (p.getVideoData().video_id === next) { became = next; break; }
   }
   await new Promise((r) => setTimeout(r, 600));
+  const vEl2 = p.querySelector('video');
   return {
     ok: became === next, hidden: document.hidden,
     from: cur, to: next, became,
-    playerState: p.getPlayerState(), videoPaused: (p.querySelector('video') || {}).paused,
+    playerState: p.getPlayerState(), videoPaused: (vEl2 || {}).paused,
+    pipBefore, pipAfter: vEl2 ? vEl2.webkitPresentationMode : 'no-video',
+    sameVideoEl: vEl === vEl2,
     queueLen: st.queue.length, index: idx + 1, hasToken: !!st.token,
   };
 })()

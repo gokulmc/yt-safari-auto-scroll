@@ -101,8 +101,8 @@ def hero():
         cx -= 16 * SS
 
     out = canvas.convert("RGB").resize((1200, 470), Image.LANCZOS)
-    out.save(DOCS / "hero.png")
-    print("wrote", DOCS / "hero.png")
+    out.save(DOCS / "hero-light.png")
+    print("wrote", DOCS / "hero-light.png")
 
 def glyph_play(d, cx, cy, s, color):
     d.polygon([(cx - s * 0.32, cy - s * 0.5), (cx + s * 0.5, cy), (cx - s * 0.32, cy + s * 0.5)], fill=color)
@@ -153,8 +153,8 @@ def modes():
         for j, ln in enumerate(lines):
             d.text((x0 + 34 * SS, cy0 + 146 * SS + j * 32 * SS), ln, font=f_b, fill=MUTED)
     out = canvas.resize((1200, 300), Image.LANCZOS)
-    out.save(DOCS / "modes.png")
-    print("wrote", DOCS / "modes.png")
+    out.save(DOCS / "modes-light.png")
+    print("wrote", DOCS / "modes-light.png")
 
 if __name__ == "__main__":
     hero()

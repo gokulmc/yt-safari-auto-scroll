@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/hero.png" width="760" alt="YT Shorts Auto-Scroll"></p>
+<p align="center"><img src="docs/hero-light.png" width="760" alt="YT Shorts Auto-Scroll"></p>
 
 <p align="center">
   <a href="#install"><img src="https://img.shields.io/badge/Safari-17%2B-blue?logo=safari&logoColor=white" alt="Safari 17+"></a>
@@ -15,7 +15,7 @@ in the background, and (the genuinely hard part) plays real Shorts in a
 **Picture-in-Picture window that keeps advancing on its own, even while Safari
 is hidden.**
 
-<p align="center"><img src="docs/modes.png" width="840" alt="Auto-scroll · Background audio · Background PiP"></p>
+<p align="center"><img src="docs/modes-light.png" width="840" alt="Auto-scroll · Background audio · Background PiP"></p>
 
 - **Auto-scroll Shorts** — when a Short ends, it advances to the next one
   automatically. Toggle it on/off from the toolbar.

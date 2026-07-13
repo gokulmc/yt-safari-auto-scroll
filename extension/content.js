@@ -12,6 +12,20 @@
 (() => {
   const log = (...args) => console.log('[yt-auto-scroll]', ...args);
 
+  // Diagnostic: counts rAF ticks over 500ms. In a hidden tab WebKit
+  // suspends the rendering pipeline (rAF ≈ 0 ticks) — but a page with an
+  // active PiP window may be exempt. This probe settles that empirically.
+  const probeRenderingAlive = (label) => {
+    let ticks = 0;
+    const t0 = Date.now();
+    const tick = () => {
+      ticks += 1;
+      if (Date.now() - t0 < 500) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    setTimeout(() => log(`probe[${label}]: hidden=${document.hidden} rafTicks/500ms=${ticks}`), 700);
+  };
+
   const SELECTORS = {
     activeVideo: 'ytd-reel-video-renderer[is-active] video',
     fallbackVideo: '#shorts-player video',
@@ -141,6 +155,21 @@
             .catch((err) => log('stall recovery 2/3: main-world navigation failed', String(err)));
         }
       } else {
+        const inPip = pipActive || (currentVideo && isElementInPiP(currentVideo));
+        if (document.hidden && !inPip) {
+          // Hidden tab with no PiP window to preserve: hand playback off
+          // to the regular /watch page near the video's end — watch-page
+          // autoplay-next is timer+fetch driven and keeps advancing in
+          // background tabs, which Shorts' scroll-based advance never can
+          // (WebKit suspends the rendering pipeline for hidden pages).
+          const id = ((advanceFromPathname || '').match(/\/shorts\/([^/?]+)/) || [])[1];
+          if (id) {
+            const t = Math.max(0, Math.floor((v && v.duration) || 0) - 1);
+            log(`stall recovery 3/3: handing off to watch-page autoplay (v=${id}, t=${t}s)`);
+            location.href = `https://www.youtube.com/watch?v=${id}&t=${t}s`;
+            return;
+          }
+        }
         log('stall recovery 3/3: arming visibilitychange retry');
         armVisibilityRetry();
       }
@@ -294,6 +323,9 @@
 
     attemptCounts.set(videoIdKey(), (attemptCounts.get(videoIdKey()) || 0) + 1);
     log(`advance() reason=${reason} mechanism=${advanceMechanism}`);
+    if (document.hidden || isElementInPiP(v)) {
+      probeRenderingAlive(`advance:${reason}${document.hidden ? ':hidden' : ''}${isElementInPiP(v) ? ':pip' : ''}`);
+    }
     scheduleStallCheck(v);
   }
 

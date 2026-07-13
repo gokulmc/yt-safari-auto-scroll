@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  YT Shorts Auto-Scroll — hand-authored source icon.
+  Canvas: 1024x1024. This is the human-editable source of truth; scripts/gen_icons.py
+  redraws the SAME geometry with PIL (no SVG rasterizer is available on this machine) using
+  matching coordinate constants. If you edit numbers here, mirror them in gen_icons.py.
+
+  Geometry (all coordinates in the 1024x1024 viewBox):
+    Tile          : 0,0 -> 1024,1024, corner radius 225 (~22%), vertical gradient
+                    #FF0033 (top) -> #8F0016 (bottom).
+    Play triangle : apex-weighted center nudged right of true center (512,512) to
+                    (552,390) for optical balance. Vertices before rounding:
+                      top    (402, 220)
+                      apex   (702, 390)
+                      bottom (402, 560)
+                    Corners rounded with radius 34 (quadratic-bezier-at-vertex method).
+                    Sits entirely within the upper 55% of the tile (y <= 563).
+    Chevron 1     : thick stroked "v", points (402,650) (512,720) (622,650),
+                    stroke-width 46, round caps/joins, white, opacity 1.0.
+    Chevron 2     : same shape shifted down, points (402,760) (512,830) (622,760),
+                    stroke-width 46, round caps/joins, white, opacity 0.7.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>YT Shorts Auto-Scroll</title>
+  <defs>
+    <linearGradient id="tileGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FF0033"/>
+      <stop offset="100%" stop-color="#8F0016"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Tile: rounded square, ~22% corner radius, vertical gradient -->
+  <rect x="0" y="0" width="1024" height="1024" rx="225" ry="225" fill="url(#tileGrad)"/>
+
+  <!-- Play triangle: white, rounded corners (radius 34), nudged right for optical centering -->
+  <path
+    d="M 431.58,236.76
+       L 672.42,373.24
+       Q 702,390 672.42,406.76
+       L 431.58,543.24
+       Q 402,560 431.58,526.00
+       L 402,254
+       Q 402,220 431.58,236.76
+       Z"
+    fill="#FFFFFF"/>
+
+  <!-- Double chevron down: auto-scroll indicator -->
+  <polyline points="402,650 512,720 622,650"
+    fill="none" stroke="#FFFFFF" stroke-width="46"
+    stroke-linecap="round" stroke-linejoin="round" opacity="1.0"/>
+  <polyline points="402,760 512,830 622,760"
+    fill="none" stroke="#FFFFFF" stroke-width="46"
+    stroke-linecap="round" stroke-linejoin="round" opacity="0.7"/>
+</svg>

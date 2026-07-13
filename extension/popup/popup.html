@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>YT Shorts Auto-Scroll</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <h1 class="title">YT Shorts Auto-Scroll</h1>
+
+      <div class="row toggle-row">
+        <label class="toggle-label" for="enabled-toggle">Auto-scroll Shorts</label>
+        <label class="switch">
+          <input type="checkbox" id="enabled-toggle" />
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+      </div>
+
+      <button id="pip-button" class="pip-button" type="button">Picture-in-Picture this page</button>
+      <p id="pip-message" class="pip-message" role="status" hidden></p>
+
+      <footer class="footer">
+        <span>YT Shorts Auto-Scroll</span>
+        <a href="https://github.com/gokulmc/yt-safari-auto-scroll" target="_blank" rel="noopener noreferrer"
+          >GitHub</a
+        >
+      </footer>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

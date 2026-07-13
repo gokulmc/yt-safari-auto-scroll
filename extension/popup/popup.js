@@ -18,7 +18,9 @@ const TOOLBAR_SIZES = [16, 19, 32, 38];
 
 const setToolbarIcon = (enabled) => {
   const suffix = enabled ? '' : '-off';
-  const paths = Object.fromEntries(TOOLBAR_SIZES.map((s) => [s, `images/toolbar-${s}${suffix}.png`]));
+  // Root-relative: Safari resolves setIcon paths against the calling page
+  // (popup/), not the extension root — "images/..." becomes "popup/images/...".
+  const paths = Object.fromEntries(TOOLBAR_SIZES.map((s) => [s, `/images/toolbar-${s}${suffix}.png`]));
   return browser.action
     .setIcon({ path: paths })
     .catch(() => {

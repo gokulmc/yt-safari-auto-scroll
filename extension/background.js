@@ -2,11 +2,13 @@
 // toolbar icon in sync with the auto-scroll toggle (full-color tile when
 // on, grey/translucent when off). Everything functional lives in the
 // content scripts; this worker just reacts to storage changes.
+// Root-relative paths: Safari resolves setIcon paths against the calling
+// context's directory rather than the extension root.
 const iconPaths = (suffix) => ({
-  16: `images/toolbar-16${suffix}.png`,
-  19: `images/toolbar-19${suffix}.png`,
-  32: `images/toolbar-32${suffix}.png`,
-  38: `images/toolbar-38${suffix}.png`,
+  16: `/images/toolbar-16${suffix}.png`,
+  19: `/images/toolbar-19${suffix}.png`,
+  32: `/images/toolbar-32${suffix}.png`,
+  38: `/images/toolbar-38${suffix}.png`,
 });
 
 const syncIcon = () =>

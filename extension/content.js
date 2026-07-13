@@ -34,6 +34,7 @@
   let lastTrustedInputTime = 0;
   let advancePending = false;
   let advanceMechanism = null;
+  let advanceFromPathname = null;
 
   let pipActive = false;
   let pipVideoElement = null;
@@ -101,17 +102,61 @@
       log(`stall recovery: play() retry ${stallRetryCount}/3`);
       v.play().catch(() => {});
       scheduleStallCheck(v);
-    } else if (v.ended) {
-      // The next-button click was swallowed (happens in PiP-placeholder
-      // mode) — escalate to the keyboard shortcut instead of waiting for
-      // the 5s watchdog to re-click the same dead button.
+    } else if (v.ended && location.pathname === advanceFromPathname) {
+      // The advance didn't take (URL unchanged). Both the next button and
+      // ArrowDown drive a scroll-snap animation, and hidden tabs have
+      // rAF/IntersectionObserver frozen — the scroll only completes when
+      // the window becomes visible again. Escalate to mechanisms that
+      // bypass the rendering pipeline entirely.
       stallRetryCount += 1;
-      log(`stall recovery: advance didn't take, ArrowDown escalation ${stallRetryCount}/3`);
-      document.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true })
-      );
+      if (stallRetryCount === 1) {
+        log('stall recovery 1/3: ArrowDown');
+        document.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true })
+        );
+      } else if (stallRetryCount === 2) {
+        // A real <a href="/shorts/..."> click goes through YouTube's SPA
+        // router (plain event delegation, not rAF-gated) — this is how
+        // regular-video autoplay manages to navigate in background tabs.
+        const anchor = findNextShortsAnchor();
+        if (anchor) {
+          log('stall recovery 2/3: clicking next reel anchor', anchor.getAttribute('href'));
+          anchor.click();
+        } else {
+          log('stall recovery 2/3: no next-reel /shorts/ anchor found in DOM');
+        }
+      } else {
+        log('stall recovery 3/3: arming visibilitychange retry');
+        armVisibilityRetry();
+      }
       scheduleStallCheck(v);
     }
+  };
+
+  const findNextShortsAnchor = () => {
+    const active = document.querySelector('ytd-reel-video-renderer[is-active]');
+    let sib = active ? active.nextElementSibling : null;
+    while (sib) {
+      const a = sib.querySelector ? sib.querySelector('a[href^="/shorts/"]') : null;
+      if (a) return a;
+      sib = sib.nextElementSibling;
+    }
+    for (const a of document.querySelectorAll('ytd-reel-video-renderer a[href^="/shorts/"]')) {
+      if (a.getAttribute('href') !== location.pathname) return a;
+    }
+    return null;
+  };
+
+  const armVisibilityRetry = () => {
+    document.addEventListener(
+      'visibilitychange',
+      () => {
+        if (!document.hidden && enabled && isOnShorts() && currentVideo && currentVideo.ended) {
+          advance(currentVideo, 'visibility-retry');
+        }
+      },
+      { once: true }
+    );
   };
 
   const scheduleStallCheck = (v) => {
@@ -206,6 +251,7 @@
     lastAdvanceTime = now;
     advancePending = true;
     advanceMechanism = null;
+    advanceFromPathname = location.pathname;
     pipArmedForAdvance = isElementInPiP(v);
     pipRestoreAttemptedForAdvance = false;
     stallRetryCount = 0;

@@ -1,7 +1,14 @@
-// background.js — the extension's only background responsibility: keep the
-// toolbar icon in sync with the auto-scroll toggle (full-color tile when
-// on, grey/translucent when off). Everything functional lives in the
-// content scripts; this worker just reacts to storage changes.
+// background.js
+//  - Keeps the toolbar icon in sync with the auto-scroll toggle.
+//  - Handles the hidden-tab / PiP Shorts advance: content.js can't reach
+//    YouTube's page-world player, so on `ended` in a hidden tab it asks us
+//    to advance in the page's MAIN world. We swap the next Short's stream
+//    into the same player element via loadVideoById — proven to work while
+//    the tab is hidden and to keep an active PiP window alive (PiP is bound
+//    to that element). The scroll-based advance content.js uses in a
+//    visible tab is frozen by WebKit when the page isn't rendering, which
+//    is why the hidden case needs this different mechanism entirely.
+
 // Root-relative paths: Safari resolves setIcon paths against the calling
 // context's directory rather than the extension root.
 const iconPaths = (suffix) => ({
@@ -23,89 +30,6 @@ browser.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && 'enabled' in changes) syncIcon();
 });
 
-// Content scripts run in an isolated world and can't see YouTube's JS
-// component data, and hidden tabs freeze the scroll pipeline that the
-// next-button relies on. When asked, inject into the page's MAIN world,
-// read the next reel's videoId off YouTube's own element data, and
-// navigate through a real anchor click (SPA router — works while hidden).
-browser.runtime.onMessage.addListener((msg, sender) => {
-  if (!msg || msg.type !== 'advance-shorts' || !sender || !sender.tab || typeof sender.tab.id !== 'number') return;
-  return browser.scripting
-    .executeScript({
-      target: { tabId: sender.tab.id },
-      world: 'MAIN',
-      func: () => {
-        const currentId = (location.pathname.match(/\/shorts\/([^/?]+)/) || [])[1] || null;
-        // YouTube sometimes hides Polymer state behind .polymerController.
-        const dataOf = (el) => (el && (el.data || (el.polymerController && el.polymerController.data))) || null;
-        const idFromEntry = (e) => {
-          if (!e) return null;
-          const c =
-            e.command ||
-            (e.onTap && e.onTap.innertubeCommand) ||
-            e;
-          return (c && c.reelWatchEndpoint && c.reelWatchEndpoint.videoId) || null;
-        };
-        const navigate = (videoId, via) => {
-          const a = document.createElement('a');
-          a.href = '/shorts/' + videoId;
-          a.style.display = 'none';
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          return { ok: true, via, videoId };
-        };
-
-        // Strategy 1: sibling reel renderers carrying their own data.
-        const reels = Array.from(document.querySelectorAll('ytd-reel-video-renderer'));
-        for (let i = 0; i < reels.length; i++) {
-          const id = idFromEntry(dataOf(reels[i]));
-          if (id && id === currentId && i + 1 < reels.length) {
-            const nid = idFromEntry(dataOf(reels[i + 1]));
-            if (nid) return navigate(nid, 'sibling-reel-data');
-          }
-        }
-
-        // Strategy 2: the ytd-shorts feed component holds the upcoming
-        // entries even when only one reel element is rendered.
-        const shorts = document.querySelector('ytd-shorts');
-        const sd = dataOf(shorts);
-        const entries = sd && (sd.entries || sd.contents);
-        if (Array.isArray(entries)) {
-          const ids = entries.map((e) => idFromEntry(e));
-          const idx = ids.indexOf(currentId);
-          if (idx !== -1) {
-            const nid = ids.slice(idx + 1).find((x) => x);
-            if (nid) return navigate(nid, 'shorts-entries');
-          }
-        }
-
-        // Strategy 3: the player app's own next-video API.
-        const pEl = document.getElementById('shorts-player') || document.getElementById('movie_player');
-        const player = pEl && (typeof pEl.getPlayer === 'function' ? pEl.getPlayer() : pEl);
-        if (player && typeof player.nextVideo === 'function') {
-          player.nextVideo();
-          return { ok: true, via: 'player.nextVideo' };
-        }
-
-        return {
-          ok: false,
-          reason: 'no-strategy-worked',
-          currentId,
-          reelCount: reels.length,
-          reelHasData: reels.map((r) => !!dataOf(r)),
-          shortsPresent: !!shorts,
-          shortsDataKeys: sd ? Object.keys(sd).slice(0, 25) : null,
-          entriesLen: Array.isArray(entries) ? entries.length : null,
-          playerEl: pEl ? pEl.id : null,
-          playerHasNextVideo: !!(player && typeof player.nextVideo === 'function'),
-        };
-      },
-    })
-    .then((results) => (results && results[0] && results[0].result) || { ok: false, reason: 'no-result' })
-    .catch((err) => ({ ok: false, reason: String(err) }));
-});
-
 const injectMain = (tabId, func, args) =>
   browser.scripting
     .executeScript({ target: { tabId }, world: 'MAIN', func, args: args || [] })
@@ -116,81 +40,79 @@ browser.runtime.onMessage.addListener((msg, sender) => {
   const tabId = sender && sender.tab && sender.tab.id;
   if (!msg || typeof tabId !== 'number') return;
 
-  // Build the queue of upcoming Short videoIds via YouTube's own
-  // reel_watch_sequence innertube endpoint (fetch — alive in hidden tabs).
-  // This is what lets us keep playing SHORTS in a background watch-page
-  // player instead of the landscape recommendations autoplay serves.
-  if (msg.type === 'get-next-shorts') {
+  // Advance the current Short in place, staying on the Shorts page. All of
+  // this runs in the page's MAIN world; every piece — reading ytInitialData,
+  // fetch, loadVideoById — stays alive in a hidden tab, so this is the one
+  // path that advances Shorts while backgrounded. A persistent per-document
+  // queue (window.__ytsasQ) is seeded from ytInitialData and refilled from
+  // the reel_watch_sequence endpoint so playback continues indefinitely.
+  if (msg.type === 'shorts-advance-inplace') {
     return injectMain(tabId, async () => {
-      const out = { ids: [] };
-      const cfg = window.ytcfg && typeof window.ytcfg.get === 'function' ? window.ytcfg : null;
-      const apiKey = cfg ? cfg.get('INNERTUBE_API_KEY') : null;
-      const ctx = cfg ? cfg.get('INNERTUBE_CONTEXT') : null;
+      const ID_RE = /\/shorts\/([A-Za-z0-9_-]{11})/g;
+      const SEQ_RE = /"sequenceParams":"([^"]+)"/g;
+      const VID_RE = /"videoId":"([A-Za-z0-9_-]{11})"/g;
+      const uniq = (a) => Array.from(new Set(a));
 
-      const seqParams = [];
-      const seen = new Set();
-      const walk = (o, d) => {
-        if (!o || typeof o !== 'object' || d > 12 || seen.has(o)) return;
-        seen.add(o);
-        for (const k of Object.keys(o)) {
-          if (k === 'sequenceParams' && typeof o[k] === 'string') seqParams.push(o[k]);
-          if (o[k] && typeof o[k] === 'object') walk(o[k], d + 1);
-        }
-      };
-      try {
-        if (window.ytInitialData) walk(window.ytInitialData, 0);
-      } catch (e) {
-        /* ignore */
+      const p = document.getElementById('shorts-player');
+      if (!p || typeof p.loadVideoById !== 'function' || typeof p.getVideoData !== 'function') {
+        return { ok: false, reason: 'no-shorts-player' };
       }
-      out.diag = { hasApiKey: !!apiKey, hasContext: !!ctx, seqParams: seqParams.length };
+      const cur = p.getVideoData().video_id;
 
-      if (apiKey && ctx && seqParams[0]) {
+      const st = (window.__ytsasQ = window.__ytsasQ || {});
+      if (!st.queue) {
+        let s = '{}';
         try {
-          const res = await fetch(
-            `https://www.youtube.com/youtubei/v1/reel/reel_watch_sequence?key=${apiKey}&prettyPrint=false`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ context: ctx, sequenceParams: seqParams[0] }),
-              credentials: 'include',
-            }
-          );
-          const json = await res.json();
-          const ids = [];
-          const walkIds = (o, d) => {
-            if (!o || typeof o !== 'object' || d > 8) return;
-            for (const k of Object.keys(o)) {
-              if (k === 'videoId' && typeof o[k] === 'string') ids.push(o[k]);
-              else if (o[k] && typeof o[k] === 'object') walkIds(o[k], d + 1);
-            }
-          };
-          walkIds(json, 0);
-          const cur = (location.pathname.match(/\/shorts\/([^/?]+)/) || [])[1] || null;
-          out.ids = Array.from(new Set(ids)).filter((x) => x !== cur);
-          out.diag.status = res.status;
+          s = JSON.stringify(window.ytInitialData || {});
         } catch (e) {
-          out.diag.fetchError = String(e);
+          /* ignore */
+        }
+        st.queue = uniq(Array.from(s.matchAll(ID_RE)).map((m) => m[1]));
+        st.seq = uniq(Array.from(s.matchAll(SEQ_RE)).map((m) => m[1]));
+      }
+
+      let idx = st.queue.indexOf(cur);
+      if (idx === -1) {
+        // Current Short isn't in our list (e.g. the user scrolled manually);
+        // anchor the queue at it so we can move forward from here.
+        st.queue.push(cur);
+        idx = st.queue.length - 1;
+      }
+      let next = st.queue[idx + 1];
+
+      if (!next) {
+        // Refill from the reel sequence endpoint (fetch works while hidden).
+        const cfg = window.ytcfg && typeof window.ytcfg.get === 'function' ? window.ytcfg : null;
+        const apiKey = cfg ? cfg.get('INNERTUBE_API_KEY') : null;
+        const ctx = cfg ? cfg.get('INNERTUBE_CONTEXT') : null;
+        const seqParam = st.seq && st.seq[st.seq.length - 1];
+        if (apiKey && ctx && seqParam) {
+          try {
+            const res = await fetch(
+              `https://www.youtube.com/youtubei/v1/reel/reel_watch_sequence?key=${apiKey}&prettyPrint=false`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ context: ctx, sequenceParams: seqParam }),
+                credentials: 'include',
+              }
+            );
+            const txt = await res.text();
+            const more = uniq(Array.from(txt.matchAll(VID_RE)).map((m) => m[1]));
+            const moreSeq = uniq(Array.from(txt.matchAll(SEQ_RE)).map((m) => m[1]));
+            for (const id of more) if (!st.queue.includes(id)) st.queue.push(id);
+            if (moreSeq.length) st.seq = moreSeq; // chain forward for the next refill
+            next = st.queue[idx + 1];
+          } catch (e) {
+            return { ok: false, reason: 'refill-failed: ' + e };
+          }
         }
       }
-      return out;
-    });
-  }
 
-  // Swap the next Short's stream into the watch-page player element —
-  // preserves the PiP session (bound to that element) and works hidden.
-  if (msg.type === 'load-video-by-id' && msg.videoId) {
-    return injectMain(
-      tabId,
-      (videoId) => {
-        const p = document.getElementById('movie_player');
-        if (p && typeof p.loadVideoById === 'function') {
-          p.loadVideoById(videoId);
-          return { ok: true };
-        }
-        return { ok: false, reason: 'no-loadVideoById' };
-      },
-      [msg.videoId]
-    );
+      if (!next) return { ok: false, reason: 'queue-exhausted', queueLen: st.queue.length };
+      p.loadVideoById(next);
+      return { ok: true, from: cur, to: next, queueLen: st.queue.length, index: idx + 1 };
+    });
   }
 });
 

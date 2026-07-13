@@ -12,20 +12,6 @@
 (() => {
   const log = (...args) => console.log('[yt-auto-scroll]', ...args);
 
-  // Diagnostic: counts rAF ticks over 500ms. In a hidden tab WebKit
-  // suspends the rendering pipeline (rAF ≈ 0 ticks) — but a page with an
-  // active PiP window may be exempt. This probe settles that empirically.
-  const probeRenderingAlive = (label) => {
-    let ticks = 0;
-    const t0 = Date.now();
-    const tick = () => {
-      ticks += 1;
-      if (Date.now() - t0 < 500) requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
-    setTimeout(() => log(`probe[${label}]: hidden=${document.hidden} rafTicks/500ms=${ticks}`), 700);
-  };
-
   const SELECTORS = {
     activeVideo: 'ytd-reel-video-renderer[is-active] video',
     fallbackVideo: '#shorts-player video',
@@ -104,103 +90,31 @@
     }
   };
 
+  // Visible-tab stall recovery only. (The hidden path uses loadVideoById,
+  // which doesn't schedule a stall check.) If the next-button click didn't
+  // take, retry once with ArrowDown; once navigated, nudge the new video if
+  // it landed paused. Never play() a not-yet-navigated ended video — that
+  // restarts the OLD Short and masquerades as a successful advance.
   const checkStall = (v) => {
     stallTimer = null;
     if (!enabled || !isOnShorts()) return;
-    if (stallRetryCount >= 3) {
-      log('stall recovery: gave up after 3 retries');
-      return;
-    }
+    if (stallRetryCount >= 2) return;
     const navigated = location.pathname !== advanceFromPathname;
     if (navigated) {
-      // Navigation took — the only remaining stall is the NEW video
-      // sitting paused. (Never play() before navigation: on an ended
-      // video it restarts the OLD Short from zero and masquerades as a
-      // successful advance.)
       const nv = currentVideo || v;
       if (nv.paused && !nv.ended) {
         stallRetryCount += 1;
-        log(`stall recovery: post-navigation play() retry ${stallRetryCount}/3`);
         nv.play().catch(() => {});
         scheduleStallCheck(nv);
       }
-    } else {
-      // The advance didn't take (URL unchanged). Both the next button and
-      // ArrowDown drive a scroll-snap animation, and hidden tabs have
-      // rAF/IntersectionObserver frozen — the scroll only completes when
-      // the window becomes visible again. Escalate to mechanisms that
-      // bypass the rendering pipeline entirely.
-      stallRetryCount += 1;
-      if (stallRetryCount === 1) {
-        log('stall recovery 1/3: ArrowDown');
-        document.dispatchEvent(
-          new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true })
-        );
-      } else if (stallRetryCount === 2) {
-        // A real <a href="/shorts/..."> click goes through YouTube's SPA
-        // router (plain event delegation, not rAF-gated) — this is how
-        // regular-video autoplay manages to navigate in background tabs.
-        const anchor = findNextShortsAnchor();
-        if (anchor) {
-          log('stall recovery 2/3: clicking next reel anchor', anchor.getAttribute('href'));
-          anchor.click();
-        } else {
-          // No anchors in the Shorts DOM (confirmed live) — ask the
-          // background worker to read the next reel's videoId from
-          // YouTube's component data in the page's MAIN world and
-          // click-navigate to it.
-          browser.runtime
-            .sendMessage({ type: 'advance-shorts' })
-            .then((res) => log('stall recovery 2/3: main-world navigation →', JSON.stringify(res)))
-            .catch((err) => log('stall recovery 2/3: main-world navigation failed', String(err)));
-        }
-      } else {
-        const inPip = pipActive || (currentVideo && isElementInPiP(currentVideo));
-        if (document.hidden && !inPip) {
-          // Hidden tab with no PiP window to preserve: hand playback off
-          // to the regular /watch page near the video's end — watch-page
-          // autoplay-next is timer+fetch driven and keeps advancing in
-          // background tabs, which Shorts' scroll-based advance never can
-          // (WebKit suspends the rendering pipeline for hidden pages).
-          const id = ((advanceFromPathname || '').match(/\/shorts\/([^/?]+)/) || [])[1];
-          if (id) {
-            const t = Math.max(0, Math.floor((v && v.duration) || 0) - 1);
-            log(`stall recovery 3/3: handing off to watch-page autoplay (v=${id}, t=${t}s)`);
-            location.href = `https://www.youtube.com/watch?v=${id}&t=${t}s`;
-            return;
-          }
-        }
-        log('stall recovery 3/3: arming visibilitychange retry');
-        armVisibilityRetry();
-      }
-      scheduleStallCheck(v);
+      return;
     }
-  };
-
-  const findNextShortsAnchor = () => {
-    const active = document.querySelector('ytd-reel-video-renderer[is-active]');
-    let sib = active ? active.nextElementSibling : null;
-    while (sib) {
-      const a = sib.querySelector ? sib.querySelector('a[href^="/shorts/"]') : null;
-      if (a) return a;
-      sib = sib.nextElementSibling;
-    }
-    for (const a of document.querySelectorAll('ytd-reel-video-renderer a[href^="/shorts/"]')) {
-      if (a.getAttribute('href') !== location.pathname) return a;
-    }
-    return null;
-  };
-
-  const armVisibilityRetry = () => {
-    document.addEventListener(
-      'visibilitychange',
-      () => {
-        if (!document.hidden && enabled && isOnShorts() && currentVideo && location.pathname === advanceFromPathname) {
-          advance(currentVideo, 'visibility-retry');
-        }
-      },
-      { once: true }
+    stallRetryCount += 1;
+    log(`stall recovery ${stallRetryCount}/2: ArrowDown`);
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, which: 40, bubbles: true })
     );
+    scheduleStallCheck(v);
   };
 
   const scheduleStallCheck = (v) => {
@@ -253,46 +167,6 @@
     log('PiP restore: injected click-to-restore toast (automatic attempts failed silently)');
   };
 
-  // Big, centered, unmissable one-click PiP prompt. Used on a fresh watch
-  // page where scripted PiP is gesture-gated — a small corner toast was
-  // easy to miss, so this is deliberately front-and-center.
-  const GESTURE_PROMPT_ID = 'yt-sas-gesture-prompt';
-  const showGesturePrompt = (v) => {
-    const existing = document.getElementById(GESTURE_PROMPT_ID);
-    if (existing) existing.remove();
-
-    const btn = document.createElement('button');
-    btn.id = GESTURE_PROMPT_ID;
-    btn.type = 'button';
-    btn.textContent = '▶  Start background Shorts (Picture-in-Picture)';
-    Object.assign(btn.style, {
-      position: 'fixed',
-      top: '50%',
-      left: '50%',
-      transform: 'translate(-50%, -50%)',
-      zIndex: '2147483647',
-      background: '#ff0033',
-      color: '#fff',
-      border: 'none',
-      padding: '18px 28px',
-      borderRadius: '12px',
-      font: '600 16px/1.3 -apple-system, BlinkMacSystemFont, sans-serif',
-      cursor: 'pointer',
-      boxShadow: '0 6px 28px rgba(0,0,0,0.5)',
-    });
-    btn.addEventListener(
-      'click',
-      () => {
-        btn.remove();
-        if (typeof v.webkitSetPresentationMode === 'function') v.webkitSetPresentationMode('picture-in-picture');
-        if (typeof v.requestPictureInPicture === 'function') v.requestPictureInPicture().catch(() => {});
-      },
-      { once: true }
-    );
-    document.body.appendChild(btn);
-    log('shorts-continuation: showing one-click PiP prompt (scripted PiP is gesture-gated on a fresh page)');
-  };
-
   const tryRequestPictureInPicture = (v) => {
     if (typeof v.requestPictureInPicture !== 'function') {
       showRestoreToast(v);
@@ -340,6 +214,25 @@
     pipRestoreAttemptedForAdvance = false;
     stallRetryCount = 0;
     clearStallTimer();
+    attemptCounts.set(videoIdKey(), (attemptCounts.get(videoIdKey()) || 0) + 1);
+
+    // Hidden tab: the scroll/next-button advance is frozen by WebKit's
+    // rendering suspension, so swap the next Short's stream in place via
+    // the page-world player (loadVideoById) instead — proven to work while
+    // hidden and to keep an active PiP window alive. The visible-tab path
+    // below keeps the scroll UI correct when the user is actually looking.
+    if (document.hidden) {
+      advanceMechanism = 'loadVideoById (hidden)';
+      log(`advance() reason=${reason} mechanism=${advanceMechanism}`);
+      browser.runtime
+        .sendMessage({ type: 'shorts-advance-inplace' })
+        .then((r) => {
+          log('advance in-place →', JSON.stringify(r));
+          if (r && r.ok) advancePending = false;
+        })
+        .catch((err) => log('advance in-place failed', String(err)));
+      return;
+    }
 
     const nextBtn =
       document.querySelector(SELECTORS.nextButton) || document.querySelector(SELECTORS.nextButtonFallback);
@@ -348,9 +241,6 @@
       nextBtn.click();
     } else {
       advanceMechanism = 'synthetic ArrowDown';
-      // Never history.pushState (invisible to YouTube's isolated-world
-      // router) and never location.href (full reload kills PiP and burns
-      // the page's user-activation).
       const evt = new KeyboardEvent('keydown', {
         key: 'ArrowDown',
         code: 'ArrowDown',
@@ -361,11 +251,7 @@
       document.dispatchEvent(evt);
     }
 
-    attemptCounts.set(videoIdKey(), (attemptCounts.get(videoIdKey()) || 0) + 1);
     log(`advance() reason=${reason} mechanism=${advanceMechanism}`);
-    if (document.hidden || isElementInPiP(v)) {
-      probeRenderingAlive(`advance:${reason}${document.hidden ? ':hidden' : ''}${isElementInPiP(v) ? ':pip' : ''}`);
-    }
     scheduleStallCheck(v);
   }
 
@@ -638,133 +524,6 @@
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', scanForActiveVideo, { once: true });
   }
-
-  // ---- Watch-mode PiP: Shorts → /watch handoff ------------------------------
-  // A watch page swaps the next video's stream into the SAME <video>
-  // element (timers+fetch — alive in hidden tabs), and PiP is bound to the
-  // element, so YouTube's own autoplay advances forever, background and
-  // PiP included. Shorts can never do this (compositor-scroll advance), so
-  // this converts the current Short onto that machinery.
-  const WATCH_MODE_FLAG = 'yt-sas-watch-mode-pip';
-  const SHORTS_QUEUE_KEY = 'yt-sas-shorts-queue';
-  const SHORTS_DIAG_KEY = 'yt-sas-shorts-diag';
-
-  browser.runtime.onMessage.addListener((msg) => {
-    if (!msg || msg.type !== 'watch-mode-pip') return;
-    const id = (location.pathname.match(/\/shorts\/([^/?]+)/) || [])[1];
-    if (!id) {
-      log('watch-mode: not on a /shorts/ page, ignoring');
-      return;
-    }
-    const v = document.querySelector(SELECTORS.activeVideo) || document.querySelector(SELECTORS.fallbackVideo);
-    const t = v && v.currentTime > 1 ? `&t=${Math.floor(v.currentTime)}s` : '';
-    // Build a queue of upcoming SHORT ids so the watch page keeps playing
-    // Shorts (via loadVideoById) rather than YouTube's landscape autoplay.
-    browser.runtime
-      .sendMessage({ type: 'get-next-shorts' })
-      .then((res) => {
-        const ids = (res && res.ids) || [];
-        log(`watch-mode: got ${ids.length} upcoming Shorts`, JSON.stringify((res && res.diag) || {}));
-        try {
-          sessionStorage.setItem(WATCH_MODE_FLAG, '1');
-          sessionStorage.setItem(SHORTS_QUEUE_KEY, JSON.stringify(ids));
-          // Persist the queue-build diagnostics across the navigation so
-          // they're visible in the (fresh) watch-page console.
-          sessionStorage.setItem(SHORTS_DIAG_KEY, JSON.stringify((res && res.diag) || {}));
-        } catch (err) {
-          /* storage may be blocked; navigation is still worth doing */
-        }
-        location.href = `https://www.youtube.com/watch?v=${id}${t}`;
-      })
-      .catch((err) => {
-        log('watch-mode: queue fetch failed, going anyway', String(err));
-        try {
-          sessionStorage.setItem(WATCH_MODE_FLAG, '1');
-        } catch (e) {
-          /* ignore */
-        }
-        location.href = `https://www.youtube.com/watch?v=${id}${t}`;
-      });
-  });
-
-  // On the watch page after a watch-mode handoff: pop into PiP, then keep
-  // playing the queued Shorts by swapping each next id into the SAME player
-  // element on `ended`. All three pieces — the media `ended` event, the
-  // runtime message, and loadVideoById — stay alive in a hidden tab, and
-  // reusing the element preserves the PiP window. This is the only path
-  // that plays Shorts hands-free in the background.
-  const startShortsContinuation = () => {
-    let flagged = false;
-    let queue = [];
-    try {
-      flagged = sessionStorage.getItem(WATCH_MODE_FLAG) === '1';
-      queue = JSON.parse(sessionStorage.getItem(SHORTS_QUEUE_KEY) || '[]');
-    } catch (err) {
-      return;
-    }
-    if (!flagged || !location.pathname.startsWith('/watch')) return;
-    let diag = '{}';
-    try {
-      diag = sessionStorage.getItem(SHORTS_DIAG_KEY) || '{}';
-      sessionStorage.removeItem(WATCH_MODE_FLAG);
-      sessionStorage.removeItem(SHORTS_QUEUE_KEY);
-      sessionStorage.removeItem(SHORTS_DIAG_KEY);
-    } catch (err) {
-      /* ignore */
-    }
-    log(`shorts-continuation: active with ${queue.length} queued Shorts — queue-build diag:`, diag);
-    if (queue.length === 0) {
-      log('shorts-continuation: EMPTY QUEUE → watch-page autoplay will serve landscape. Diag above shows why.');
-    }
-
-    let qIndex = 0;
-    let advancing = false;
-    const onWatchEnded = (e) => {
-      if (!(e.target instanceof HTMLVideoElement) || advancing) return;
-      if (!e.target.closest('#movie_player')) return;
-      if (qIndex >= queue.length) {
-        log('shorts-continuation: queue exhausted');
-        return;
-      }
-      advancing = true;
-      const nextId = queue[qIndex++];
-      log(`shorts-continuation: loading next Short ${nextId} (${qIndex}/${queue.length})`);
-      browser.runtime
-        .sendMessage({ type: 'load-video-by-id', videoId: nextId })
-        .then((r) => log('shorts-continuation: loadVideoById →', JSON.stringify(r)))
-        .catch((err) => log('shorts-continuation: loadVideoById failed', String(err)))
-        .finally(() => setTimeout(() => (advancing = false), 800));
-    };
-    document.addEventListener('ended', onWatchEnded, true);
-
-    // Enter PiP once the player video is ready. Scripted PiP is gesture-
-    // gated on a fresh document, so fall back to a prominent one-click
-    // prompt.
-    let attempts = 0;
-    const enter = () => {
-      const v = document.querySelector('#movie_player video') || document.querySelector('video.html5-main-video');
-      if (!v || v.readyState < 2) {
-        if ((attempts += 1) < 20) setTimeout(enter, 500);
-        return;
-      }
-      if (typeof v.webkitSetPresentationMode === 'function') {
-        try {
-          v.webkitSetPresentationMode('picture-in-picture');
-        } catch (err) {
-          /* verified below */
-        }
-      }
-      setTimeout(() => {
-        if (isElementInPiP(v)) {
-          log('shorts-continuation: PiP entered automatically');
-        } else {
-          showGesturePrompt(v);
-        }
-      }, 400);
-    };
-    enter();
-  };
-  startShortsContinuation();
 
   // ---- SPA nav --------------------------------------------------------------
   // YouTube is a SPA; entering/leaving Shorts and scrolling between Shorts

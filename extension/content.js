@@ -573,41 +573,59 @@
     const currentVid = () => { try { return new URLSearchParams(location.search).get('v'); } catch (e) { return null; } };
     let bouncedForId = currentVid(); // don't bounce the first (fresh, rendering) entry
     let bouncing = false;
-    const bounceIfAdvanced = () => {
-      const v = document.querySelector('#movie_player video');
-      if (!v || bouncing) return;
-      const inPip = v.webkitPresentationMode === 'picture-in-picture' || document.pictureInPictureElement === v;
-      if (!inPip) return;
-      const id = currentVid();
-      if (!id || id === bouncedForId) return;
-      bouncedForId = id;
-      bouncing = true;
-      // Exit to inline, then poll-re-enter until it takes. Safari refuses the
-      // re-entry until it finishes tearing down the old PiP surface (~1.5s
-      // after the advance) — a fixed delay is fragile, so keep trying every
-      // 200ms until webkitPresentationMode reports we're back. This is the
-      // minimum-flicker, maximally-robust form (verified holding across
-      // consecutive advances while hidden). The ~1.5s gap between Shorts is
-      // Safari's PiP transition time and can't be shortened.
-      try { v.webkitSetPresentationMode('inline'); } catch (e) {}
-      let tries = 0;
-      const reenter = () => {
-        const vid = document.querySelector('#movie_player video');
-        if (!vid) { bouncing = false; return; }
-        if (vid.webkitPresentationMode === 'picture-in-picture') { bouncing = false; return; }
-        try { vid.webkitSetPresentationMode('picture-in-picture'); } catch (e) {}
-        if ((tries += 1) < 16) setTimeout(reenter, 200);
-        else bouncing = false;
-      };
-      setTimeout(reenter, 300);
-      log('bg-shorts: bounced PiP to re-render after advance → ' + id);
-    };
-    // A playlist advance reuses the player element, changes the URL's v=,
-    // and fires `playing` for the new video. Trigger the bounce on both.
-    document.addEventListener('playing', (e) => {
-      if (e.target instanceof HTMLVideoElement && e.target.closest('#movie_player')) setTimeout(bounceIfAdvanced, 500);
+    let advanceInProgress = false;
+    // We restore PiP on every advance once the user has entered it. Track that
+    // intent so a leavepictureinpicture caused by the advance (a drop, not a
+    // user close) doesn't clear it — only a leave OUTSIDE an advance means the
+    // user closed PiP deliberately.
+    let pipDesired = document.pictureInPictureElement != null;
+    document.addEventListener('enterpictureinpicture', () => { pipDesired = true; }, true);
+    document.addEventListener('webkitpresentationmodechanged', (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLVideoElement)) return;
+      if (t.webkitPresentationMode === 'picture-in-picture') pipDesired = true;
+      else if (!advanceInProgress) pipDesired = false;
     }, true);
-    document.addEventListener('yt-navigate-finish', () => setTimeout(bounceIfAdvanced, 500));
+
+    const onAdvance = () => {
+      const id = currentVid();
+      if (!id || id === bouncedForId) return; // same video → not an advance
+      bouncedForId = id;
+      if (!pipDesired || bouncing) return;
+      bouncing = true;
+      advanceInProgress = true;
+      // Safari drops PiP to inline on the advance and refuses re-entry until it
+      // finishes tearing down the old surface (~1.5s — a hard floor). Wait for
+      // the drop, then re-enter the instant Safari allows it. No fixed pre-delay
+      // and no redundant exit, so the flicker is only Safari's transition time.
+      let sawDrop = false;
+      let tries = 0;
+      const poll = () => {
+        const vid = document.querySelector('#movie_player video');
+        if (!vid) { bouncing = false; advanceInProgress = false; return; }
+        const mode = vid.webkitPresentationMode;
+        if (mode !== 'picture-in-picture') {
+          sawDrop = true;
+          try { vid.webkitSetPresentationMode('picture-in-picture'); } catch (e) {}
+        } else if (sawDrop) {
+          bouncing = false;
+          advanceInProgress = false;
+          log('bg-shorts: re-entered PiP after advance → ' + id);
+          return;
+        }
+        if ((tries += 1) < 24) setTimeout(poll, 150);
+        else { bouncing = false; advanceInProgress = false; }
+      };
+      poll();
+    };
+    // Trigger on the EARLIEST advance signal so the re-entry lands right at
+    // Safari's floor: the new video's loadstart/emptied/playing, or the SPA nav.
+    ['loadstart', 'emptied', 'playing'].forEach((ev) =>
+      document.addEventListener(ev, (e) => {
+        if (e.target instanceof HTMLVideoElement && e.target.closest('#movie_player')) onAdvance();
+      }, true)
+    );
+    document.addEventListener('yt-navigate-finish', onAdvance);
 
     // One-click PiP prompt (scripted PiP is gesture-gated on a fresh page).
     const PROMPT_ID = 'yt-sas-bg-pip-prompt';
@@ -633,6 +651,7 @@
       btn.addEventListener('click', () => {
         btn.remove();
         bouncedForId = currentVid();
+        pipDesired = true;
         if (typeof v.webkitSetPresentationMode === 'function') v.webkitSetPresentationMode('picture-in-picture');
         else if (typeof v.requestPictureInPicture === 'function') v.requestPictureInPicture().catch(() => {});
       }, { once: true });

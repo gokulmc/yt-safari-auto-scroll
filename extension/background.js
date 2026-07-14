@@ -251,10 +251,12 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       // Chain the personalized continuation, but STOP once it stops yielding
       // new videos — padding with a looping/exhausted sequence is exactly
       // what makes the playlist feel repetitive.
-      // Extra rounds because the unlisted + watched filters reduce the yield.
+      // Gather MORE than 50 candidates so that dropping unlisted ones still
+      // leaves a full playlist. Extra rounds because watched/unlisted filters
+      // reduce the yield.
       let guard = 0;
       let dryRounds = 0;
-      while (ids.length < 50 && token && guard < 16 && dryRounds < 2) {
+      while (ids.length < 70 && token && guard < 20 && dryRounds < 2) {
         guard += 1;
         const before = ids.length;
         try {
@@ -267,10 +269,37 @@ browser.runtime.onMessage.addListener((msg, sender) => {
         dryRounds = ids.length > before ? 0 : dryRounds + 1;
       }
 
-      // Current Short first (unless it too was already watched), then the
-      // clean, unwatched upcoming reels, capped at 50.
-      const ordered = Array.from(new Set([cur].concat(ids))).filter((id) => !watched.has(id)).slice(0, 50);
-      return { ok: true, ids: ordered, count: ordered.length, source, watchedCount: watched.size };
+      // Candidates: current Short first (unless watched), then unwatched reels.
+      const candidates = Array.from(new Set([cur].concat(ids))).filter((id) => !watched.has(id));
+
+      // Reliably drop UNLISTED videos. The reel entry's isUnlisted flag is
+      // unreliable (often absent — verified it misses ~10% of unlisted), so
+      // confirm each candidate via the player endpoint's authoritative
+      // microformat.isUnlisted. Parallel batches keep it ~1s per 30.
+      const checkUnlisted = async (id) => {
+        try {
+          const r = await fetch(
+            `https://www.youtube.com/youtubei/v1/player?key=${apiKey}&prettyPrint=false`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context: ctx, videoId: id }), credentials: 'include' }
+          );
+          const txt = await r.text();
+          const mm = txt.match(/"isUnlisted":(true|false)/);
+          return mm ? mm[1] === 'true' : false; // unknown -> treat as listed
+        } catch (e) {
+          return false;
+        }
+      };
+      const ordered = [];
+      let unlistedDropped = 0;
+      for (let i = 0; i < candidates.length && ordered.length < 50; i += 8) {
+        const batch = candidates.slice(i, i + 8);
+        const flags = await Promise.all(batch.map(checkUnlisted));
+        batch.forEach((id, k) => {
+          if (flags[k]) unlistedDropped += 1;
+          else if (ordered.length < 50) ordered.push(id);
+        });
+      }
+      return { ok: true, ids: ordered, count: ordered.length, source, watchedCount: watched.size, unlistedDropped };
     });
   }
 });

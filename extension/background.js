@@ -192,6 +192,20 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       const ctx = cfg ? cfg.get('INNERTUBE_CONTEXT') : null;
       if (!apiKey || !ctx) return { ok: false, reason: 'no-innertube-config' };
 
+      // Exclude ALREADY-WATCHED Shorts. YouTube doesn't flag watched state in
+      // the reel data, but the watch-history page embeds every watched videoId.
+      // Fetch it in the background (same-origin, credentials — no navigation)
+      // and collect those ids. If history is off/unavailable, we just don't
+      // filter.
+      const watched = new Set();
+      try {
+        const h = await fetch('https://www.youtube.com/feed/history', { credentials: 'include' });
+        const html = await h.text();
+        for (const mm of html.matchAll(/"videoId":"([A-Za-z0-9_-]{11})"/g)) watched.add(mm[1]);
+      } catch (e) {
+        /* history unavailable — proceed without the watched filter */
+      }
+
       const fetchSeq = async (body) => {
         const res = await fetch(
           `https://www.youtube.com/youtubei/v1/reel/reel_watch_sequence?key=${apiKey}&prettyPrint=false`,
@@ -215,7 +229,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
         const seed = reelIdsFrom(rwsr);
         if (seed.length) {
           source = 'ytInitialReelWatchSequenceResponse';
-          for (const id of seed) if (!ids.includes(id)) ids.push(id);
+          for (const id of seed) if (!ids.includes(id) && !watched.has(id)) ids.push(id);
           token = digToken(rwsr.continuationEndpoint, 0);
         }
       }
@@ -227,7 +241,7 @@ browser.runtime.onMessage.addListener((msg, sender) => {
         const seqParams = btoa(String.fromCharCode.apply(null, seqBytes));
         try {
           const first = await fetchSeq({ sequenceParams: seqParams });
-          for (const id of reelIdsFrom(first)) if (!ids.includes(id)) ids.push(id);
+          for (const id of reelIdsFrom(first)) if (!ids.includes(id) && !watched.has(id)) ids.push(id);
           token = digToken(first.continuationEndpoint, 0);
         } catch (e) {
           return { ok: false, reason: 'seed-fetch-failed: ' + e };
@@ -237,14 +251,15 @@ browser.runtime.onMessage.addListener((msg, sender) => {
       // Chain the personalized continuation, but STOP once it stops yielding
       // new videos — padding with a looping/exhausted sequence is exactly
       // what makes the playlist feel repetitive.
+      // Extra rounds because the unlisted + watched filters reduce the yield.
       let guard = 0;
       let dryRounds = 0;
-      while (ids.length < 50 && token && guard < 12 && dryRounds < 2) {
+      while (ids.length < 50 && token && guard < 16 && dryRounds < 2) {
         guard += 1;
         const before = ids.length;
         try {
           const more = await fetchSeq({ continuation: token });
-          for (const id of reelIdsFrom(more)) if (!ids.includes(id)) ids.push(id);
+          for (const id of reelIdsFrom(more)) if (!ids.includes(id) && !watched.has(id)) ids.push(id);
           token = digToken(more.continuationEndpoint, 0);
         } catch (e) {
           break;
@@ -252,9 +267,10 @@ browser.runtime.onMessage.addListener((msg, sender) => {
         dryRounds = ids.length > before ? 0 : dryRounds + 1;
       }
 
-      // Current Short first, then the clean upcoming reels, capped at 50.
-      const ordered = Array.from(new Set([cur].concat(ids))).slice(0, 50);
-      return { ok: true, ids: ordered, count: ordered.length, source };
+      // Current Short first (unless it too was already watched), then the
+      // clean, unwatched upcoming reels, capped at 50.
+      const ordered = Array.from(new Set([cur].concat(ids))).filter((id) => !watched.has(id)).slice(0, 50);
+      return { ok: true, ids: ordered, count: ordered.length, source, watchedCount: watched.size };
     });
   }
 });
